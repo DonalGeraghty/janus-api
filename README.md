@@ -1,6 +1,6 @@
 # Janus API
 
-Janus API is the backend for [Nyx](https://github.com/DonalGeraghty/nyx). It provides account authentication, per-user encrypted OpenAI, Mistral AI, and Anthropic credentials, selectable AI models, structured meal analysis, and user-scoped nutrition storage.
+Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (workouts), [Minerva](https://github.com/DonalGeraghty/minerva) (flashcards), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides account authentication, per-user encrypted OpenAI, Mistral AI, and Anthropic credentials, selectable AI models, structured meal and workout analysis, an AI flashcard assistant with spaced-repetition scheduling, and user-scoped data storage for all three apps.
 
 ## Responsibilities
 
@@ -9,22 +9,27 @@ Janus API is the backend for [Nyx](https://github.com/DonalGeraghty/nyx). It pro
 - Verify user-supplied OpenAI, Mistral AI, and Anthropic API keys
 - Encrypt provider keys with Google Cloud KMS before persistence
 - Persist each user's selected provider and model
-- Analyze meal descriptions with structured responses from the selected model
-- Create, list, update, and delete user-owned nutrition entries
-- Generate structured meal recommendations from today's calorie and protein progress
+- Analyze meal descriptions with structured responses from the selected model (Nyx)
+- Create, list, update, and delete user-owned nutrition entries (Nyx)
+- Generate structured meal recommendations from today's calorie and protein progress (Nyx)
+- Analyze natural-language workout descriptions and manage workout history (Aether)
+- Answer flashcard questions and draft reviewable flashcards with an AI assistant (Minerva)
+- Create, list, update, delete, and spaced-repetition-schedule user-owned flashcards (Minerva)
 - Store opt-in Web Push settings/subscriptions and dispatch local-time reminders
-- Delete credentials, nutrition data, and workout history when an account is removed
+- Delete credentials, nutrition data, workout history, and flashcards when an account is removed
 - Expose health and database-status endpoints for deployment checks
 
 ## Architecture
 
 ```text
-Nyx or another API client
+Aether, Minerva, or Nyx (React/Vite frontends)
   └─ Janus API (Flask)
        ├─ Firestore
-       │    ├─ users/{email}
+       │    ├─ users/{email}                          (includes minerva_settings)
        │    ├─ users/{email}/nutrition_entries/{entry}
        │    ├─ users/{email}/workout_history/{entry}
+       │    ├─ users/{email}/flashcards/{card}
+       │    ├─ users/{email}/flashcard_reviews/{review}
        │    ├─ users/{email}/private/openai
        │    ├─ users/{email}/private/mistral
        │    └─ users/{email}/private/anthropic
@@ -34,6 +39,8 @@ Nyx or another API client
        ├─ Mistral AI Chat API
        └─ Anthropic Messages API
 ```
+
+See [Overall architecture](#overall-architecture) below for how this fits together with the three frontends and Google Cloud.
 
 ## Tech stack
 
@@ -134,6 +141,15 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `GET/PUT` | `/api/user/push-settings` | Bearer JWT | Read or change daily reminder settings |
 | `POST/DELETE` | `/api/user/push-subscriptions` | Bearer JWT | Add or remove this device's Push subscription |
 | `PUT/GET/DELETE` | `/api/user/openai-key` | Bearer JWT | Compatibility alias for the OpenAI credential |
+| `GET` | `/api/user/minerva-settings` | Bearer JWT | Return Minerva assistant settings (for example, whether existing cards are used as context) |
+| `PUT` | `/api/user/minerva-settings` | Bearer JWT | Update Minerva assistant settings |
+| `POST` | `/api/minerva/respond` | Bearer JWT | Ask the Minerva AI assistant a question or request a draft flashcard |
+| `POST` | `/api/flashcards` | Bearer JWT | Create a flashcard |
+| `GET` | `/api/flashcards` | Bearer JWT | List the authenticated account's flashcards |
+| `GET` | `/api/flashcards/due` | Bearer JWT | List flashcards due for review |
+| `PUT` | `/api/flashcards/{card_id}` | Bearer JWT | Update an owned flashcard |
+| `DELETE` | `/api/flashcards/{card_id}` | Bearer JWT | Delete an owned flashcard |
+| `POST` | `/api/flashcards/{card_id}/reviews` | Bearer JWT | Record a recall rating (Again/Hard/Good/Easy) and reschedule the card |
 | `POST` | `/api/nutrition/analyze` | Bearer JWT | Analyze a meal without saving it |
 | `POST` | `/api/nutrition/recommend` | Bearer JWT | Recommend meals for the rest of the day |
 | `POST` | `/api/nutrition/entries` | Bearer JWT | Save a reviewed nutrition entry |
@@ -287,10 +303,16 @@ Configure these GitHub Actions secrets:
 | --- | --- |
 | `GCP_SA_KEY` | Authenticates the deployment workflow to Google Cloud |
 | `JWT_SECRET_KEY` | Signs production JWTs |
+| `VAPID_PRIVATE_KEY` | Signs outgoing Web Push messages |
+| `VAPID_PUBLIC_KEY` | Sent to browsers when they subscribe to Web Push |
+| `VAPID_SUBJECT` | Contact `mailto:`/HTTPS URL required by the Web Push protocol |
+| `PUSH_CRON_SECRET` | Shared secret the Cloud Scheduler job sends as `X-Cron-Secret` to authorize `/api/internal/push/reminders` |
+
+The workflow also creates or updates a Cloud Scheduler job (still named `nyx-push-reminders`, a pre-rename name kept because renaming it has no functional benefit) that calls that endpoint every five minutes, but only when `PUSH_CRON_SECRET` is set.
 
 The Cloud Run runtime service account needs:
 
-- Firestore access for users, credentials, nutrition entries, and workout history
+- Firestore access for users, credentials, nutrition entries, workout history, and flashcards
 - `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the configured KMS key
 
 The workflow grants that KMS role directly on the existing, legacy-named key
@@ -308,23 +330,55 @@ The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, `ANTHROPIC_MODEL`, and `AI_
 .
 ├── core/
 │   ├── auth_service.py          # Password hashing and JWT handling
-│   └── nutrition_service.py     # Nutrition-entry validation
+│   ├── nutrition_service.py     # Nutrition-entry validation
+│   ├── workout_service.py       # Workout-entry validation
+│   ├── flashcard_service.py     # Flashcard validation and spaced-repetition scheduling
+│   └── push_service.py          # Web Push settings/subscription validation
 ├── services/
 │   ├── firebase/                # Firestore persistence by data type
 │   ├── credential_service.py    # Cloud KMS encryption and decryption
 │   ├── ai_catalog.py            # Allowlisted providers and models
-│   ├── ai_contract.py           # Shared prompts and structured response schemas
+│   ├── ai_contract.py           # Shared prompts and structured response schemas, including Minerva's
 │   ├── ai_service.py            # Provider-neutral request dispatch
-│   ├── anthropic_service.py      # Anthropic key verification and meal analysis
+│   ├── ai_errors.py             # Shared AI error mapping
+│   ├── ai_validation.py         # Shared AI response validation
+│   ├── anthropic_service.py      # Anthropic key verification and meal/workout/Minerva analysis
 │   ├── logging_service.py       # Console logging
-│   ├── mistral_service.py       # Mistral key verification and meal analysis
-│   └── openai_service.py        # OpenAI key verification and meal analysis
+│   ├── mistral_service.py       # Mistral key verification and meal/workout/Minerva analysis
+│   ├── openai_service.py        # OpenAI key verification and meal/workout/Minerva analysis
+│   └── web_push_service.py      # VAPID signing and Web Push dispatch
 ├── tests/                       # Unit and API tests
 ├── app.py                       # Flask application and routes
 ├── Dockerfile
 └── requirements.txt
 ```
 
-## Related project
+## Related projects
 
-- [Nyx](https://github.com/DonalGeraghty/nyx) — React frontend for the Janus API
+- [Aether](https://github.com/DonalGeraghty/aether) — React frontend for workout tracking
+- [Minerva](https://github.com/DonalGeraghty/minerva) — React frontend for AI-assisted flashcards
+- [Nyx](https://github.com/DonalGeraghty/nyx) — React frontend for nutrition tracking
+
+## Overall architecture
+
+Janus API is the shared backend behind three independently deployed React/Vite frontends — Aether, Minerva, and Nyx. All four services run as separate Cloud Run services in the same Google Cloud project (`donal-geraghty-home`, region `europe-west1`).
+
+```text
+Aether (React/Vite, Cloud Run)   ─┐
+Minerva (React/Vite, Cloud Run)  ─┼─▶ Janus API (Flask, Cloud Run) ─┬─▶ Firestore
+Nyx (React/Vite, Cloud Run)      ─┘                                 │     (users, credentials, nutrition,
+                                                                     │      workouts, flashcards)
+                                                                     ├─▶ Cloud KMS
+                                                                     │     (encrypts each user's provider key)
+                                                                     ├─▶ OpenAI / Mistral AI / Anthropic
+                                                                     │     (called with the user's own key)
+                                                                     └─▶ Cloud Scheduler
+                                                                           (POST /api/internal/push/reminders,
+                                                                            every 5 minutes)
+```
+
+- Each frontend is a static Vite build served by nginx in its own container (Node build stage, then `nginx:alpine`, port `8080`, with a `/health` endpoint), deployed from its own Artifact Registry repository (`aether`, `minerva`, `nyx`) by its own `deploy-gcp.yml` GitHub Actions workflow. Those workflows build, push, then `gcloud run deploy`, preferring Workload Identity Federation with a `GCP_SA_KEY` secret as a fallback.
+- Janus API deploys differently: `.github/workflows/deploy.yml` runs `gcloud run deploy --source .`, which lets Cloud Build produce the container directly from source, so there is no separate Artifact Registry push step and no Workload Identity Federation — authentication uses only the static `GCP_SA_KEY` secret.
+- Every frontend points at this service via a `VITE_JANUS_API_URL` build-time variable (defaulting to the deployed Janus API URL). Because all three frontends talk to the same Janus API deployment and Firestore project, a single account's credentials, selected AI provider/model, and login session are shared across Aether, Minerva, and Nyx.
+- Each frontend calls the Janus API endpoints relevant to it (Aether → `/api/workouts/*`, Nyx → `/api/nutrition/*`, Minerva → `/api/minerva/*` and `/api/flashcards/*`) plus the shared `/api/auth/*` and `/api/user/*` endpoints for account and AI-credential management.
+- Two pieces of infrastructure still carry pre-rename names from when this service only served Nyx: the KMS keyring `janus-gate` (kept because existing encrypted credentials are bound to its resource name) and the Cloud Scheduler job `nyx-push-reminders` (renaming it has no functional benefit, since it now dispatches reminders for every app's users).
