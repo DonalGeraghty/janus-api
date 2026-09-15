@@ -1,5 +1,5 @@
 """
-Core business logic for the portfolio auth API.
+Core business logic for Janus API.
 
 Janus API is named for the Roman god of doorways, passages, and transitions.
 """

@@ -296,36 +296,3 @@ def delete_all_ai_credentials(email, expected_account_id, deletion_token):
         if not deleted:
             return False, error
     return True, None
-
-
-def save_openai_credential(email, ciphertext, last_four, account_id=None):
-    """Compatibility wrapper for legacy callers that produce v1 OpenAI ciphertext."""
-    return save_ai_credential(
-        email,
-        "openai",
-        ciphertext,
-        last_four,
-        aad_version=1,
-        account_id=account_id,
-    )
-
-
-def get_openai_credential(email, account_id=None):
-    return get_ai_credential(email, "openai", account_id)
-
-
-def get_openai_credential_status(email, account_id=None):
-    return get_ai_credential_status(email, "openai", account_id)
-
-
-def delete_openai_credential(
-    email,
-    expected_account_id=None,
-    deletion_token=None,
-):
-    return delete_ai_credential_for_account_deletion(
-        email,
-        "openai",
-        expected_account_id,
-        deletion_token,
-    )

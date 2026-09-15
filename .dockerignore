@@ -42,8 +42,6 @@ Thumbs.db
 
 # Documentation
 README.md
-FIREBASE_SETUP.md
-ENV_EXAMPLE.txt
 
 # Test files
 test_*.py

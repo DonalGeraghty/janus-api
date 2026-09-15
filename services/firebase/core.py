@@ -32,7 +32,6 @@ def initialize_firebase():
                     "auth_method": "service_account_key",
                     "status": "failed"
                 })
-                print("Warning: Falling back to in-memory storage")
                 db_state.auth_users_memory = {}
                 return
         else:
@@ -41,9 +40,6 @@ def initialize_firebase():
                 "fallback": "in_memory_storage",
                 "status": "warning"
             })
-            print("Tip: For local development, set GOOGLE_APPLICATION_CREDENTIALS")
-            print("Tip: For production, deploy on Google Cloud with proper IAM service account")
-            print("Using in-memory storage as fallback")
             db_state.auth_users_memory = {}
             return
 
@@ -67,7 +63,6 @@ def initialize_firebase():
             "database": "firestore",
             "status": "failed"
         })
-        print("Falling back to in-memory storage")
         db_state.db = None
         db_state.users_collection_ref = None
         db_state.auth_users_memory = {}

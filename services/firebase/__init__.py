@@ -45,11 +45,7 @@ from .openai_credentials import (
     delete_ai_credential,
     delete_ai_credential_for_account_deletion,
     delete_all_ai_credentials,
-    delete_openai_credential,
     get_ai_credential,
     get_ai_credential_status,
-    get_openai_credential,
-    get_openai_credential_status,
     save_ai_credential,
-    save_openai_credential,
 )
