@@ -81,7 +81,7 @@ Activate the environment before running commands:
 source .venv/bin/activate
 ```
 
-Create a local `.env` file:
+Copy [`.env.example`](.env.example) to `.env` and fill in real values:
 
 ```dotenv
 FLASK_ENV=development

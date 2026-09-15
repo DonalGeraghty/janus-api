@@ -1,4 +1,4 @@
-"""Janus API: a small user authentication API."""
+"""Janus API: shared backend for Aether, Minerva, and Nyx — authentication, nutrition, workout, and flashcard/Minerva-assistant data, and encrypted AI-provider credentials."""
 
 import os
 import hmac

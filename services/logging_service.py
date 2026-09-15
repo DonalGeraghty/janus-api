@@ -18,20 +18,8 @@ def get_logger(name, _environment=None):
     return logging.getLogger(name)
 
 
-def get_janus_api_logger():
-    return get_logger("janus-api")
-
-
 def get_flask_app_logger():
     return get_logger("flask_app")
-
-
-def get_access_logger():
-    return get_logger("access")
-
-
-def get_error_logger():
-    return get_logger("error")
 
 
 logger = setup_logging()
