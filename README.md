@@ -1,6 +1,6 @@
 # Janus API
 
-Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (workouts), [Minerva](https://github.com/DonalGeraghty/minerva) (flashcards), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides account authentication, per-user encrypted OpenAI, Mistral AI, and Anthropic credentials, selectable AI models, structured meal and workout analysis, an AI flashcard assistant with spaced-repetition scheduling, and user-scoped data storage for all three apps.
+Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (habits), [Minerva](https://github.com/DonalGeraghty/minerva) (flashcards), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides authentication, encrypted per-user AI credentials, selectable AI models, habit drafting and tracking, meal analysis, a flashcard assistant with spaced repetition, and account-owned storage.
 
 ## Responsibilities
 
@@ -12,11 +12,13 @@ Janus API is the shared backend for three sibling frontends — [Aether](https:/
 - Analyze meal descriptions with structured responses from the selected model (Nyx)
 - Create, list, update, and delete user-owned nutrition entries (Nyx)
 - Generate structured meal recommendations from today's calorie and protein progress (Nyx)
-- Analyze natural-language workout descriptions and manage workout history (Aether)
+- Manage Aether habits, categories, groups, schedules, timezone settings, dated check-ins, and streak statistics
+- Draft reviewable habits from intentions using the selected AI provider and existing habit/label context
 - Answer flashcard questions and draft reviewable flashcards with an AI assistant (Minerva)
 - Create, list, update, delete, and spaced-repetition-schedule user-owned flashcards (Minerva)
 - Store opt-in Web Push settings/subscriptions and dispatch local-time reminders
 - Delete credentials, nutrition data, workout history, and flashcards when an account is removed
+- Delete habit definitions and check-ins as part of guarded account deletion
 - Expose health and database-status endpoints for deployment checks
 
 ## Architecture
@@ -27,7 +29,9 @@ Aether, Minerva, or Nyx (React/Vite frontends)
        ├─ Firestore
        │    ├─ users/{email}                          (includes minerva_settings)
        │    ├─ users/{email}/nutrition_entries/{entry}
-       │    ├─ users/{email}/workout_history/{entry}
+       │    ├─ users/{email}/aether/state
+       │    ├─ users/{email}/habit_checkins/{habit_id}_{date}
+       │    ├─ users/{email}/workout_history/{entry}       (legacy cleanup only)
        │    ├─ users/{email}/flashcards/{card}
        │    ├─ users/{email}/flashcard_reviews/{review}
        │    ├─ users/{email}/private/openai
@@ -113,7 +117,7 @@ python app.py
 
 The server listens on `http://localhost:5000` unless `PORT` is set.
 
-When Firestore is unavailable, local authentication, profile settings, nutrition operations, and workout history fall back to process memory. That data disappears when the server restarts. AI credential storage deliberately has no plaintext or in-memory fallback: Firestore or KMS failures cause those operations to fail closed.
+When Firestore is unavailable, local authentication, profile settings, nutrition operations, and habit tracking fall back to process memory. That data disappears when the server restarts. AI credential storage deliberately has no plaintext or in-memory fallback: Firestore or KMS failures cause those operations to fail closed.
 
 ## Authentication
 
@@ -156,10 +160,15 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `GET` | `/api/nutrition/entries` | Bearer JWT | List entries, optionally filtered by date |
 | `PUT` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Replace an owned entry and recalculate totals |
 | `DELETE` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Delete an owned entry |
-| `POST` | `/api/workouts/analyze` | Bearer JWT | Structure a natural-language workout without saving it |
-| `GET` | `/api/workouts` | Bearer JWT | List the authenticated account's workout history |
-| `PUT` | `/api/workouts/{entry_id}` | Bearer JWT | Create or replace an owned workout history entry |
-| `DELETE` | `/api/workouts/{entry_id}` | Bearer JWT | Delete an owned workout history entry |
+| `GET` | `/api/habits` | Bearer JWT | Return habits, categories, groups, timezone, streak statistics, and today's check-ins |
+| `POST` | `/api/habits` | Bearer JWT | Create a yes/no habit |
+| `PUT/DELETE` | `/api/habits/{habit_id}` | Bearer JWT | Edit, reorder, archive/restore, or permanently delete a habit and its check-ins |
+| `PUT` | `/api/habits/settings` | Bearer JWT | Set the account's IANA habit timezone |
+| `GET` | `/api/habit-checkins` | Bearer JWT | List check-ins for an inclusive start/end date range of at most 366 days |
+| `PUT` | `/api/habits/{habit_id}/checkins/{date}` | Bearer JWT | Idempotently complete/undo a dated habit and save an optional note |
+| `POST` | `/api/habit-categories` or `/api/habit-groups` | Bearer JWT | Create a category or routine group |
+| `PUT/DELETE` | `/api/habit-categories/{id}` or `/api/habit-groups/{id}` | Bearer JWT | Rename/reorder/remove a label; removing it clears its habit associations |
+| `POST` | `/api/habits/draft` | Bearer JWT | Draft up to eight editable habits without saving them |
 | `POST` | `/api/internal/push/reminders` | `X-Cron-Secret` | Dispatch due reminders from Cloud Scheduler |
 | `GET` | `/health` | No | Return service and database status |
 | `GET` | `/` | No | List the available endpoints |
@@ -184,7 +193,7 @@ AI settings accept only these provider/model combinations:
 - Mistral AI: `mistral-small-2603`, `mistral-large-2512`, or `mistral-medium-3-5`
 - Claude (Anthropic): `claude-opus-5`, `claude-sonnet-5`, or `claude-haiku-4-5-20251001`
 
-Existing users without saved AI settings default to OpenAI and `gpt-5.6-sol`. Selecting a provider does not delete any other provider's key. Meal analysis, workout analysis, and recommendation requests never fall back silently: when the selected provider has no stored key, the API returns `409 provider_key_required`.
+Existing users without saved AI settings default to OpenAI and `gpt-5.6-sol`. Selecting a provider does not delete any other provider's key. Meal analysis, habit drafting, and recommendation requests never fall back silently: when the selected provider has no stored key, the API returns `409 provider_key_required`.
 
 Credential setup authenticates keys with provider model-metadata endpoints and
 does not spend inference tokens. A key can be stored when the provider reports
@@ -268,6 +277,16 @@ Protected data is scoped through the authenticated email. The API currently allo
 
 ## Tests
 
+Aether's 282 allowed habit icons are defined in `core/habit_icons.json`, generated alongside the frontend's searchable icon catalog. Manual create/update validation and AI drafts use the same enum. To update both catalogs, run `node scripts/generate-habit-icons.mjs ../janus-api/core/habit_icons.json` from the Aether repository. Existing icon IDs remain valid.
+
+Aether state is stored in `users/{email}/aether/state`; dated check-ins are separate `users/{email}/habit_checkins/{habit_id}_{date}` documents. State is bounded to 100 habits, 50 categories and 50 groups, with a byte-size guard below Firestore's document limit. Every read/write transaction checks the account generation and deletion marker. Cleanup is batched and retryable. The local in-memory fallback follows the same rules; configured Firestore failures fail closed.
+
+Habit input uses `name`, optional `description`, allowlisted `icon`, `colour` as `#RRGGBB`, unique `days` integers (0=Monday through 6=Sunday), nullable `category_id` and `group_id`, and a `start_date` from today through the next ten years. Updates accept these editable fields except start date, plus `archived` and `order`. Schedule/archive revisions are server-owned and take effect tomorrow or on a future start date. Check-ins require a strict boolean `completed` and optional `note` of at most 1000 characters. Future and pre-start check-ins are rejected, and an unscheduled day cannot be completed.
+
+The old `/api/workouts` and `/api/workouts/*` routes are retired and return 404. Historical workout documents remain stored and are still purged by guarded account deletion. Coordinate this deployment with the habit-based Aether frontend; older workout clients are no longer supported.
+
+Streaks count consecutive scheduled completions, skip unscheduled dates, and treat an unfinished today as pending. The last-30-day rate includes elapsed scheduled dates and a completed today. Bootstrap statistics read the account's full check-in history for exact lifetime streaks; calendar range requests query only the requested dates. AI drafts use `{ "message": "..." }`, at most 2000 characters. Context comes from the authenticated account, and the draft is validated across OpenAI, Mistral, and Anthropic.
+
 Run the complete test suite:
 
 ```bash
@@ -331,7 +350,8 @@ The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, `ANTHROPIC_MODEL`, and `AI_
 ├── core/
 │   ├── auth_service.py          # Password hashing and JWT handling
 │   ├── nutrition_service.py     # Nutrition-entry validation
-│   ├── workout_service.py       # Workout-entry validation
+│   ├── habit_service.py         # Habit validation, schedules, and streaks
+│   ├── habit_icons.py           # Shared allowed icon catalog
 │   ├── flashcard_service.py     # Flashcard validation and spaced-repetition scheduling
 │   └── push_service.py          # Web Push settings/subscription validation
 ├── services/
@@ -342,10 +362,10 @@ The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, `ANTHROPIC_MODEL`, and `AI_
 │   ├── ai_service.py            # Provider-neutral request dispatch
 │   ├── ai_errors.py             # Shared AI error mapping
 │   ├── ai_validation.py         # Shared AI response validation
-│   ├── anthropic_service.py      # Anthropic key verification and meal/workout/Minerva analysis
+│   ├── anthropic_service.py      # Anthropic key verification and meal/habit/Minerva generation
 │   ├── logging_service.py       # Console logging
-│   ├── mistral_service.py       # Mistral key verification and meal/workout/Minerva analysis
-│   ├── openai_service.py        # OpenAI key verification and meal/workout/Minerva analysis
+│   ├── mistral_service.py       # Mistral key verification and meal/habit/Minerva generation
+│   ├── openai_service.py        # OpenAI key verification and meal/habit/Minerva generation
 │   └── web_push_service.py      # VAPID signing and Web Push dispatch
 ├── tests/                       # Unit and API tests
 ├── app.py                       # Flask application and routes
@@ -355,7 +375,7 @@ The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, `ANTHROPIC_MODEL`, and `AI_
 
 ## Related projects
 
-- [Aether](https://github.com/DonalGeraghty/aether) — React frontend for workout tracking
+- [Aether](https://github.com/DonalGeraghty/aether) — React frontend for habit tracking and AI-assisted habit creation
 - [Minerva](https://github.com/DonalGeraghty/minerva) — React frontend for AI-assisted flashcards
 - [Nyx](https://github.com/DonalGeraghty/nyx) — React frontend for nutrition tracking
 
@@ -380,5 +400,5 @@ Nyx (React/Vite, Cloud Run)      ─┘                                 │     
 - Each frontend is a static Vite build served by nginx in its own container (Node build stage, then `nginx:alpine`, port `8080`, with a `/health` endpoint), deployed from its own Artifact Registry repository (`aether`, `minerva`, `nyx`) by its own `deploy-gcp.yml` GitHub Actions workflow. Those workflows build, push, then `gcloud run deploy`, preferring Workload Identity Federation with a `GCP_SA_KEY` secret as a fallback.
 - Janus API deploys differently: `.github/workflows/deploy.yml` runs `gcloud run deploy --source .`, which lets Cloud Build produce the container directly from source, so there is no separate Artifact Registry push step and no Workload Identity Federation — authentication uses only the static `GCP_SA_KEY` secret.
 - Every frontend points at this service via a `VITE_JANUS_API_URL` build-time variable (defaulting to the deployed Janus API URL). Because all three frontends talk to the same Janus API deployment and Firestore project, a single account's credentials, selected AI provider/model, and login session are shared across Aether, Minerva, and Nyx.
-- Each frontend calls the Janus API endpoints relevant to it (Aether → `/api/workouts/*`, Nyx → `/api/nutrition/*`, Minerva → `/api/minerva/*` and `/api/flashcards/*`) plus the shared `/api/auth/*` and `/api/user/*` endpoints for account and AI-credential management.
+- Each frontend calls its own product endpoints (Aether → `/api/habits/*` and habit label/check-in endpoints, Nyx → `/api/nutrition/*`, Minerva → `/api/minerva/*` and `/api/flashcards/*`) plus shared authentication and AI-credential endpoints. Workout history is retained only for legacy-data cleanup.
 - Two pieces of infrastructure still carry pre-rename names from when this service only served Nyx: the KMS keyring `janus-gate` (kept because existing encrypted credentials are bound to its resource name) and the Cloud Scheduler job `nyx-push-reminders` (renaming it has no functional benefit, since it now dispatches reminders for every app's users).

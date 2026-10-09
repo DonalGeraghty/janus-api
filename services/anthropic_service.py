@@ -15,15 +15,12 @@ from pydantic import ValidationError
 from .ai_contract import (
     MAX_MEAL_MESSAGE_LENGTH,
     MAX_MINERVA_MESSAGE_LENGTH,
-    MAX_WORKOUT_MESSAGE_LENGTH,
     MEAL_ANALYSIS_PROMPT,
     MEAL_RECOMMENDATION_PROMPT,
     MINERVA_PROMPT,
-    WORKOUT_ANALYSIS_PROMPT,
     MealAnalysis,
     MealRecommendation,
     MinervaResponse,
-    WorkoutAnalysis,
     minerva_user_message,
 )
 from .ai_errors import (
@@ -43,7 +40,6 @@ GENERATION_MAX_RETRIES = 1
 # Claude 5 counts adaptive-thinking tokens against these hard output ceilings.
 MEAL_ANALYSIS_MAX_TOKENS = 4_096
 MEAL_RECOMMENDATION_MAX_TOKENS = 8_192
-WORKOUT_ANALYSIS_MAX_TOKENS = 4_096
 MINERVA_MAX_TOKENS = 4_096
 
 
@@ -193,40 +189,19 @@ def analyze_meal(message, email, api_key, model=None):
     return result
 
 
-def analyze_workout(message, email, api_key, model=None):
-    if not isinstance(message, str) or not message.strip():
-        raise ValueError("message_required")
-    message = message.strip()
-    if len(message) > MAX_WORKOUT_MESSAGE_LENGTH:
-        raise ValueError("message_too_long")
-    model = _model_name(model)
-
+def draft_habits(message, context, email, api_key, model=None):
+    from .ai_contract import HabitDraftResponse, HABIT_DRAFT_PROMPT, habit_draft_message
     try:
-        with Anthropic(
-            api_key=api_key,
-            max_retries=GENERATION_MAX_RETRIES,
-            timeout=GENERATION_TIMEOUT_SECONDS,
-        ) as client:
+        with Anthropic(api_key=api_key, max_retries=GENERATION_MAX_RETRIES, timeout=GENERATION_TIMEOUT_SECONDS) as client:
             response = client.messages.parse(
-                model=model,
-                max_tokens=WORKOUT_ANALYSIS_MAX_TOKENS,
-                system=WORKOUT_ANALYSIS_PROMPT,
-                messages=[{"role": "user", "content": message}],
-                output_format=WorkoutAnalysis,
+                model=_model_name(model), max_tokens=5000,
+                system=HABIT_DRAFT_PROMPT,
+                messages=[{'role': 'user', 'content': habit_draft_message(message, context)}],
+                output_format=HabitDraftResponse,
             )
-        analysis = _parsed_response(
-            response,
-            WorkoutAnalysis,
-            "Anthropic returned no structured workout analysis",
-        )
-    except (
-        AnthropicError,
-        ValidationError,
-        json.JSONDecodeError,
-        TypeError,
-    ) as error:
+        return _parsed_response(response, HabitDraftResponse, 'Anthropic returned no habit drafts').model_dump()
+    except (AnthropicError, ValidationError, json.JSONDecodeError, TypeError) as error:
         _raise_mapped_anthropic_error(error)
-    return analysis.model_dump()
 
 
 def recommend_meals(context, email, api_key, model=None):

@@ -1,4 +1,4 @@
-"""Janus API: shared backend for Aether, Minerva, and Nyx — authentication, nutrition, workout, and flashcard/Minerva-assistant data, and encrypted AI-provider credentials."""
+"""Shared authentication, habit/nutrition/flashcard APIs, and encrypted AI credentials."""
 
 import os
 import hmac
@@ -16,7 +16,6 @@ from core.flashcard_service import (
     FlashcardReviewInput,
     FlashcardUpdateInput,
 )
-from core.workout_service import WorkoutHistoryInput
 from core.push_service import (
     PushSettingsInput,
     PushSubscriptionDeleteInput,
@@ -48,9 +47,6 @@ from services.firebase_service import (
     review_flashcard,
     update_nutrition_entry,
     update_flashcard,
-    delete_workout_entry,
-    list_workout_entries,
-    save_workout_entry,
 )
 from services.credential_service import (
     CredentialConfigurationError,
@@ -75,7 +71,6 @@ from services.ai_errors import (
 )
 from services.ai_service import (
     analyze_meal,
-    analyze_workout,
     recommend_meals,
     respond_minerva,
     validate_provider_api_key as validate_api_key,
@@ -88,7 +83,6 @@ from services.web_push_service import (
 from services.ai_contract import (
     MAX_MEAL_MESSAGE_LENGTH,
     MAX_MINERVA_MESSAGE_LENGTH,
-    MAX_WORKOUT_MESSAGE_LENGTH,
 )
 
 
@@ -1088,118 +1082,6 @@ def nutrition_recommend():
     return jsonify(status="success", recommendation=recommendation)
 
 
-@app.post("/api/workouts/analyze")
-def workout_analyze():
-    identity = _authenticated_identity()
-    if not identity:
-        return jsonify(status="error", error="Unauthorized"), 401
-    email = identity["email"]
-
-    data = request.get_json(silent=True) or {}
-    if not isinstance(data, dict):
-        return jsonify(status="error", error="Message is required"), 400
-    message = data.get("message")
-    if not isinstance(message, str) or not message.strip():
-        return jsonify(status="error", error="Message is required"), 400
-    if len(message.strip()) > MAX_WORKOUT_MESSAGE_LENGTH:
-        return jsonify(
-            status="error",
-            error="Message must be 2000 characters or fewer",
-        ), 400
-
-    selection, credential, error = _selected_ai_credential(
-        email,
-        identity["account_id"],
-    )
-    if error:
-        logger.error("Credential read failed for %s: %s", email, error)
-        return jsonify(
-            status="error",
-            error=error,
-            message=(
-                "AI settings are unavailable"
-                if error == "settings_service_unavailable"
-                else "Secure credential storage is unavailable"
-            ),
-        ), 503
-    if not credential:
-        provider = selection["provider"]
-        return jsonify(
-            status="error",
-            error="provider_key_required",
-            provider=provider,
-            message=(
-                f"Add your {provider_name(provider)} API key before analyzing workouts"
-            ),
-        ), 409
-
-    provider = selection["provider"]
-    model = selection["model"]
-    try:
-        api_key = decrypt_api_key(
-            credential.get("ciphertext", ""),
-            email,
-            provider=provider,
-            aad_version=_stored_credential_aad_version(provider, credential),
-        )
-        analysis = analyze_workout(message, email, api_key, provider, model)
-    except ValueError as error:
-        validation_message = (
-            "Message must be 2000 characters or fewer"
-            if str(error) == "message_too_long"
-            else "Message is required"
-        )
-        return jsonify(status="error", error=validation_message), 400
-    except (CredentialConfigurationError, CredentialEncryptionError) as error:
-        logger.error("Credential decryption unavailable: %s", type(error).__name__)
-        return jsonify(
-            status="error",
-            error="credential_service_unavailable",
-            message="Secure credential storage is unavailable",
-        ), 503
-    except AIAuthenticationError:
-        return jsonify(
-            status="error",
-            error="provider_key_invalid",
-            provider=provider,
-            message=f"Your {provider_name(provider)} API key is no longer valid",
-        ), 422
-    except AIAuthorizationError:
-        return jsonify(
-            status="error",
-            error="provider_access_denied",
-            provider=provider,
-            message=(
-                f"Your {provider_name(provider)} API key does not have the "
-                "required API access"
-            ),
-        ), 403
-    except AIBillingError:
-        return jsonify(
-            status="error",
-            error="provider_billing_required",
-            provider=provider,
-            message=_provider_billing_message(provider),
-        ), 402
-    except AIRateLimitError:
-        return jsonify(
-            status="error",
-            error="provider_rate_limited",
-            provider=provider,
-            message="Workout analysis is temporarily busy",
-        ), 429
-    except AIServiceError as error:
-        logger.error("Workout analysis failed: %s", error)
-        return jsonify(
-            status="error",
-            error="provider_unavailable",
-            provider=provider,
-            message="Workout analysis failed",
-        ), 502
-
-    return jsonify(status="success", analysis=analysis)
-
-
 @app.post("/api/nutrition/entries")
 def nutrition_entries_create():
     identity = _authenticated_identity()
@@ -1401,82 +1283,6 @@ def nutrition_entry_update(entry_id):
     return jsonify(status="success", entry=entry)
 
 
-@app.get("/api/workouts")
-def workout_entries_list():
-    identity = _authenticated_identity()
-    if not identity:
-        return jsonify(status="error", error="Unauthorized"), 401
-
-    ok, error, entries = list_workout_entries(
-        identity["email"],
-        identity["account_id"],
-    )
-    if not ok:
-        logger.error(
-            "Workout history list failed for %s: %s",
-            identity["email"],
-            error,
-        )
-        return jsonify(status="error", error="Could not load workout history"), 500
-    return jsonify(status="success", entries=entries)
-
-
-@app.put("/api/workouts/<entry_id>")
-def workout_entry_save(entry_id):
-    identity = _authenticated_identity()
-    if not identity:
-        return jsonify(status="error", error="Unauthorized"), 401
-
-    try:
-        entry_input = WorkoutHistoryInput.model_validate(
-            request.get_json(silent=True) or {}
-        )
-    except ValidationError:
-        return jsonify(status="error", error="Invalid workout entry"), 400
-
-    saved, error, entry = save_workout_entry(
-        identity["email"],
-        entry_id,
-        entry_input.model_dump(),
-        identity["account_id"],
-    )
-    if error == "invalid_entry_id":
-        return jsonify(status="error", error="Invalid workout entry ID"), 400
-    if not saved:
-        logger.error(
-            "Workout history save failed for %s: %s",
-            identity["email"],
-            error,
-        )
-        return jsonify(status="error", error="Could not save workout entry"), 500
-    return jsonify(status="success", entry=entry)
-
-
-@app.delete("/api/workouts/<entry_id>")
-def workout_entry_delete(entry_id):
-    identity = _authenticated_identity()
-    if not identity:
-        return jsonify(status="error", error="Unauthorized"), 401
-
-    deleted, error = delete_workout_entry(
-        identity["email"],
-        entry_id,
-        identity["account_id"],
-    )
-    if error == "invalid_entry_id":
-        return jsonify(status="error", error="Invalid workout entry ID"), 400
-    if error == "not_found":
-        return jsonify(status="error", error="Workout entry not found"), 404
-    if not deleted:
-        logger.error(
-            "Workout history delete failed for %s: %s",
-            identity["email"],
-            error,
-        )
-        return jsonify(status="error", error="Could not delete workout entry"), 500
-    return jsonify(status="success")
-
-
 def _flashcard_failure(error, action):
     if error in {"invalid_card_id", "invalid_email"}:
         return jsonify(status="error", error="Invalid flashcard"), 400
@@ -1631,14 +1437,16 @@ def root():
             "delete_push_subscription": "DELETE /api/user/push-subscriptions",
             "analyze_meal": "POST /api/nutrition/analyze",
             "recommend_meals": "POST /api/nutrition/recommend",
-            "analyze_workout": "POST /api/workouts/analyze",
             "create_nutrition_entry": "POST /api/nutrition/entries",
             "list_nutrition_entries": "GET /api/nutrition/entries",
             "delete_nutrition_entry": "DELETE /api/nutrition/entries/{entry_id}",
             "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}",
-            "list_workout_history": "GET /api/workouts",
-            "save_workout_entry": "PUT /api/workouts/{entry_id}",
-            "delete_workout_entry": "DELETE /api/workouts/{entry_id}",
+            "habits": "GET/POST /api/habits",
+            "habit": "PUT/DELETE /api/habits/{habit_id}",
+            "habit_checkins": "GET /api/habit-checkins; PUT /api/habits/{habit_id}/checkins/{date}",
+            "habit_labels": "POST /api/habit-categories|habit-groups; PUT/DELETE /api/habit-categories|habit-groups/{id}",
+            "habit_settings": "PUT /api/habits/settings",
+            "draft_habits": "POST /api/habits/draft",
             "ask_minerva": "POST /api/minerva/respond",
             "create_flashcard": "POST /api/flashcards",
             "list_flashcards": "GET /api/flashcards",
@@ -1661,6 +1469,15 @@ def internal_error(error):
     logger.exception("Unhandled server error: %s", error)
     return jsonify(status="error", error="Internal server error"), 500
 
+
+from habit_routes import habit_blueprint
+
+app.register_blueprint(habit_blueprint(
+    lambda: _authenticated_identity(),
+    lambda email, account_id: _selected_ai_credential(email, account_id),
+    lambda *args, **kwargs: decrypt_api_key(*args, **kwargs),
+    lambda provider, credential: _stored_credential_aad_version(provider, credential),
+))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))

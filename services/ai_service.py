@@ -92,6 +92,10 @@ def validate_provider_api_key(provider, api_key, email=None):
     )
 
 
+def draft_habits(message, context, email, api_key, provider='openai', model=None):
+    return _call_provider(provider, 'draft_habits', message, context, email, api_key, _validated_model(provider, model))
+
+
 def analyze_meal(message, email, api_key, provider="openai", model=None):
     if not is_supported_provider(provider):
         raise ValueError("invalid_provider")
@@ -99,20 +103,6 @@ def analyze_meal(message, email, api_key, provider="openai", model=None):
     return _call_provider(
         provider,
         "analyze_meal",
-        message,
-        email,
-        api_key,
-        model,
-    )
-
-
-def analyze_workout(message, email, api_key, provider="openai", model=None):
-    if not is_supported_provider(provider):
-        raise ValueError("invalid_provider")
-    model = _validated_model(provider, model)
-    return _call_provider(
-        provider,
-        "analyze_workout",
         message,
         email,
         api_key,
