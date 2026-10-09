@@ -23,6 +23,7 @@ from .flashcards import delete_flashcards
 from .openai_credentials import delete_all_ai_credentials
 from .push import delete_push_data
 from .workouts import delete_workout_entries
+from .habits import delete_habit_data
 from ..logging_service import logger
 
 
@@ -598,6 +599,9 @@ def delete_user_account(email, expected_account_id):
         expected_account_id,
         deletion_token,
     ):
+        return False, "delete_failed"
+
+    if not delete_habit_data(email_key, expected_account_id, deletion_token):
         return False, "delete_failed"
 
     if not delete_flashcards(
