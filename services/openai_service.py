@@ -19,17 +19,12 @@ from pydantic import ValidationError
 from .ai_contract import (
     MAX_MEAL_MESSAGE_LENGTH,
     MAX_MINERVA_MESSAGE_LENGTH,
-    MAX_WORKOUT_MESSAGE_LENGTH,
     MEAL_ANALYSIS_PROMPT,
     MEAL_RECOMMENDATION_PROMPT,
     MINERVA_PROMPT,
-    WORKOUT_ANALYSIS_PROMPT,
-    FoodItem,
     MealAnalysis,
     MealRecommendation,
     MinervaResponse,
-    RecommendedMeal,
-    WorkoutAnalysis,
     minerva_user_message,
 )
 from .ai_errors import (
@@ -40,6 +35,7 @@ from .ai_errors import (
     AIServiceError,
 )
 from .ai_validation import AICredentialValidation, BILLING_REQUIRED
+from .ai_contract import HabitDraftResponse, HABIT_DRAFT_PROMPT, habit_draft_message
 
 
 KEY_VALIDATION_TIMEOUT_SECONDS = 5.0
@@ -190,42 +186,23 @@ def analyze_meal(message, email, api_key, model=None):
     return result
 
 
-def analyze_workout(message, email, api_key, model=None):
-    if not isinstance(message, str) or not message.strip():
-        raise ValueError("message_required")
-    message = message.strip()
-    if len(message) > MAX_WORKOUT_MESSAGE_LENGTH:
-        raise ValueError("message_too_long")
-
+def draft_habits(message, context, email, api_key, model=None):
     try:
         response = OpenAI(api_key=api_key).responses.parse(
             model=_model_name(model),
-            input=[
-                {"role": "system", "content": WORKOUT_ANALYSIS_PROMPT},
-                {"role": "user", "content": message},
-            ],
-            text_format=WorkoutAnalysis,
-            reasoning={"effort": "low"},
+            input=[{'role': 'system', 'content': HABIT_DRAFT_PROMPT},
+                   {'role': 'user', 'content': habit_draft_message(message, context)}],
+            text_format=HabitDraftResponse,
+            reasoning={'effort': 'low'},
             safety_identifier=_safety_identifier(email),
             store=False,
         )
-    except (
-        AuthenticationError,
-        PermissionDeniedError,
-        RateLimitError,
-        APIConnectionError,
-        APITimeoutError,
-        APIStatusError,
-        ValidationError,
-        json.JSONDecodeError,
-        TypeError,
-    ) as error:
+        if response.output_parsed is None:
+            raise OpenAIServiceError('OpenAI returned no habit drafts')
+        return HabitDraftResponse.model_validate(response.output_parsed.model_dump()).model_dump()
+    except (AuthenticationError, PermissionDeniedError, RateLimitError, APIConnectionError,
+            APITimeoutError, APIStatusError, ValidationError, json.JSONDecodeError, TypeError) as error:
         _raise_mapped_openai_error(error)
-
-    analysis = response.output_parsed
-    if analysis is None:
-        raise OpenAIServiceError("OpenAI returned no structured workout analysis")
-    return analysis.model_dump()
 
 
 def recommend_meals(context, email, api_key, model=None):
