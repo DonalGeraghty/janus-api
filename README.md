@@ -2,6 +2,28 @@
 
 Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (habits), [Minerva](https://github.com/DonalGeraghty/minerva) (flashcards), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides authentication, encrypted per-user AI credentials, selectable AI models, habit drafting and tracking, meal analysis, a flashcard assistant with spaced repetition, and account-owned storage.
 
+## Garmin first milestone (Minerva)
+
+Minerva now has a Garmin steps Overview and Account connection controls. This is the first milestone toward replacing its flashcard interface; other Garmin resources and saved dashboard preferences remain planned. The Garmin API is called only by Janus. Existing AI-provider selection and flashcard records are preserved.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/garmin/connection` | Safe connection metadata |
+| `PUT` | `/api/garmin/connection` | Validate and store `{ "api_key": "..." }` encrypted with Cloud KMS |
+| `DELETE` | `/api/garmin/connection` | Remove stored secrets and stop requests; retain saved history |
+| `GET` | `/api/garmin/data/steps?start=YYYY-MM-DD&end=YYYY-MM-DD` | Read daily steps for at most 28 inclusive days |
+| `POST` | `/api/garmin/refresh` | Force a steps refresh with `{ "resources": ["steps"], "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" }` |
+
+All routes require a current Janus bearer token and return `Cache-Control: no-store`. Garmin authentication failures use `409 garmin_reconnect_required`, separately from Janus login failures (`401`). Upstream secrets and error bodies are never returned.
+
+The existing `AI_KMS_KEY_NAME`, Firestore, and runtime service account are reused. Credentials live in `users/{email}/private/garmin`; keys and access tokens are KMS-encrypted with account/generation/purpose-bound authenticated data. Access tokens are obtained through Garmin's personal-key exchange and renewed before expiry. There is no plaintext, file, or in-memory credential fallback, and no additional runtime dependency or Google Cloud service is required.
+
+Steps responses have `data` and `meta` fields. Metadata includes epoch-second `fetched_at`, `fresh_until`, `last_attempt_at`, `source` (`garmin` or `cache`), `stale`, and an optional safe `warning`. A failed refresh retains the last successful data and timestamp when a copy exists. Empty successful results are cached too. Cached payloads are stored as bounded documents in `users/{email}/garmin_cache`, isolated by connection generation and date range. Recent ranges (ending within four UTC days of today) use 15-minute freshness; older ranges use 24 hours. Cache freshness does not delete stored history.
+
+Account-scoped refresh leases prevent overlapping Garmin requests across Cloud Run instances. Completed attempts apply a minimum 10-second cooldown; upstream `Retry-After` delays are honoured. Manual refresh respects these controls. Connection replacement/disconnection and account deletion invalidate in-flight writes. Reconnecting uses a new cache generation, so old history cannot appear as the new connection's data. Account deletion also removes Garmin secrets, cached data, and any Garmin settings records. Disconnecting locally does not revoke the personal key at Garmin.
+
+Run the synthetic integration tests with `python -m unittest discover -s tests -p test_garmin_api.py`, and the full suite with `python -m unittest discover -s tests`. A live smoke test requires configured Firestore/KMS access and a personal key entered through Minerva's Account page. See [Garmin's authentication instructions](https://developer.garmin.com/gc-developer-program/personal/personal-api/) for the token exchange.
+
 ## Responsibilities
 
 - Register users and issue seven-day JWT access tokens
