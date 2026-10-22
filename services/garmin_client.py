@@ -103,6 +103,8 @@ def _measurement(value):
 
 def fetch_sleep(token, day):
     data = _json_response("/sleep-service/sleep/dailySleep?" + urlencode({"date": day}), token)
+    # Diagnostics contain only fixed field names, never response values or keys.
+    invalid_field = "response object"
     try:
         if data is None:
             return None
@@ -112,23 +114,31 @@ def fetch_sleep(token, day):
         sleep = data.get("dailySleepDTO", data)
         if sleep is None:
             return data
-        if not isinstance(sleep, dict) or sleep.get("calendarDate", day) != day:
+        invalid_field = "dailySleepDTO object"
+        if not isinstance(sleep, dict):
+            raise ValueError("shape")
+        invalid_field = "calendarDate (must match the requested date)"
+        if sleep.get("calendarDate", day) != day:
             raise ValueError("date")
         for field in ("sleepTimeSeconds", "deepSleepSeconds", "lightSleepSeconds", "remSleepSeconds", "awakeSleepSeconds"):
+            invalid_field = field + " (must be a number or null)"
             _measurement(sleep.get(field))
         scores = sleep.get("sleepScores")
         if scores is not None:
+            invalid_field = "sleepScores object"
             if not isinstance(scores, dict):
                 raise ValueError("scores")
             for score in scores.values():
                 if score is None:
                     continue
+                invalid_field = "sleepScores entry (must be an object or null)"
                 if not isinstance(score, dict):
                     raise ValueError("score")
+                invalid_field = "sleepScores entry value (must be a number or null)"
                 _measurement(score.get("value"))
         return data
     except (ValueError, TypeError):
-        raise GarminError("garmin_invalid_response", "Garmin returned unexpected sleep data.") from None
+        raise GarminError("garmin_invalid_response", f"Garmin returned unexpected sleep data: {invalid_field}.") from None
 
 
 def fetch_activities(token, start, end, limit):
