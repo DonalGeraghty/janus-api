@@ -1,10 +1,10 @@
 # Janus API
 
-Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (habits), [Minerva](https://github.com/DonalGeraghty/minerva) (flashcards), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides authentication, encrypted per-user AI credentials, selectable AI models, habit drafting and tracking, meal analysis, a flashcard assistant with spaced repetition, and account-owned storage.
+Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (habits), [Minerva](https://github.com/DonalGeraghty/minerva) (Garmin), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides authentication, encrypted per-user AI credentials, selectable AI models, habit drafting and tracking, meal analysis, Garmin access and caching, and account-owned storage.
 
 ## Garmin first milestone (Minerva)
 
-Minerva now has a Garmin steps Overview and Account connection controls. This is the first milestone toward replacing its flashcard interface; other Garmin resources and saved dashboard preferences remain planned. The Garmin API is called only by Janus. Existing AI-provider selection and flashcard records are preserved.
+Minerva now has a Garmin steps Overview and Account connection controls. Its former study interface and related endpoints have been retired; other Garmin resources and saved dashboard preferences remain planned. The Garmin API is called only by Janus. Existing AI-provider selection and flashcard records are preserved.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -24,6 +24,14 @@ Account-scoped refresh leases prevent overlapping Garmin requests across Cloud R
 
 Run the synthetic integration tests with `python -m unittest discover -s tests -p test_garmin_api.py`, and the full suite with `python -m unittest discover -s tests`. A live smoke test requires configured Firestore/KMS access and a personal key entered through Minerva's Account page. See [Garmin's authentication instructions](https://developer.garmin.com/gc-developer-program/personal/personal-api/) for the token exchange.
 
+## Retired flashcard functionality
+
+Minerva now uses Garmin Overview and Account. The former flashcard CRUD/due/review endpoints, `POST /api/minerva/respond`, and `GET/PUT /api/user/minerva-settings` are removed and return 404. Card drafting prompts, provider methods, scheduling, and operational card storage code are removed too.
+
+Existing stored flashcards and review history are not migrated or erased by this release. The internal legacy cleanup module remains so explicit shared-account deletion still removes both collections with account-generation and deletion-token checks. Garmin, habit and nutrition routes, shared authentication, and AI credential/model settings remain active.
+
+Deploy the updated Minerva frontend before retiring the backend endpoints if older browser clients still need the study interface.
+
 ## Responsibilities
 
 - Register users and issue seven-day JWT access tokens
@@ -36,8 +44,6 @@ Run the synthetic integration tests with `python -m unittest discover -s tests -
 - Generate structured meal recommendations from today's calorie and protein progress (Nyx)
 - Manage Aether habits, categories, groups, schedules, timezone settings, dated check-ins, and streak statistics
 - Draft reviewable habits from intentions using the selected AI provider and existing habit/label context
-- Answer flashcard questions and draft reviewable flashcards with an AI assistant (Minerva)
-- Create, list, update, delete, and spaced-repetition-schedule user-owned flashcards (Minerva)
 - Store opt-in Web Push settings/subscriptions and dispatch local-time reminders
 - Delete credentials, nutrition data, workout history, and flashcards when an account is removed
 - Delete habit definitions and check-ins as part of guarded account deletion
@@ -49,13 +55,13 @@ Run the synthetic integration tests with `python -m unittest discover -s tests -
 Aether, Minerva, or Nyx (React/Vite frontends)
   └─ Janus API (Flask)
        ├─ Firestore
-       │    ├─ users/{email}                          (includes minerva_settings)
+       │    ├─ users/{email}                          (shared account settings)
        │    ├─ users/{email}/nutrition_entries/{entry}
        │    ├─ users/{email}/aether/state
        │    ├─ users/{email}/habit_checkins/{habit_id}_{date}
        │    ├─ users/{email}/workout_history/{entry}       (legacy cleanup only)
-       │    ├─ users/{email}/flashcards/{card}
-       │    ├─ users/{email}/flashcard_reviews/{review}
+       │    ├─ users/{email}/flashcards/{card}           (legacy cleanup only)
+       │    ├─ users/{email}/flashcard_reviews/{review} (legacy cleanup only)
        │    ├─ users/{email}/private/openai
        │    ├─ users/{email}/private/mistral
        │    └─ users/{email}/private/anthropic
@@ -167,15 +173,6 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `GET/PUT` | `/api/user/push-settings` | Bearer JWT | Read or change daily reminder settings |
 | `POST/DELETE` | `/api/user/push-subscriptions` | Bearer JWT | Add or remove this device's Push subscription |
 | `PUT/GET/DELETE` | `/api/user/openai-key` | Bearer JWT | Compatibility alias for the OpenAI credential |
-| `GET` | `/api/user/minerva-settings` | Bearer JWT | Return Minerva assistant settings (for example, whether existing cards are used as context) |
-| `PUT` | `/api/user/minerva-settings` | Bearer JWT | Update Minerva assistant settings |
-| `POST` | `/api/minerva/respond` | Bearer JWT | Ask the Minerva AI assistant a question or request a draft flashcard |
-| `POST` | `/api/flashcards` | Bearer JWT | Create a flashcard |
-| `GET` | `/api/flashcards` | Bearer JWT | List the authenticated account's flashcards |
-| `GET` | `/api/flashcards/due` | Bearer JWT | List flashcards due for review |
-| `PUT` | `/api/flashcards/{card_id}` | Bearer JWT | Update an owned flashcard |
-| `DELETE` | `/api/flashcards/{card_id}` | Bearer JWT | Delete an owned flashcard |
-| `POST` | `/api/flashcards/{card_id}/reviews` | Bearer JWT | Record a recall rating (Again/Hard/Good/Easy) and reschedule the card |
 | `POST` | `/api/nutrition/analyze` | Bearer JWT | Analyze a meal without saving it |
 | `POST` | `/api/nutrition/recommend` | Bearer JWT | Recommend meals for the rest of the day |
 | `POST` | `/api/nutrition/entries` | Bearer JWT | Save a reviewed nutrition entry |
@@ -367,30 +364,59 @@ The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, `ANTHROPIC_MODEL`, and `AI_
 
 ## Project structure
 
+`app.py` exposes `create_app(test_config=None)` and the existing module-level
+`app`. It configures Flask, CORS, request timing/logging, JSON error handlers,
+and blueprint registration. `python app.py`, Flask tooling, and imports such as
+`from app import app` continue to work without deployment changes.
+
+Each feature owns its HTTP routes in `routes/`. Shared JWT/account-generation
+checks live in `core/request_auth.py`; AI credential selection, ciphertext AAD
+version handling, and billing messages live in `services/ai_credentials.py`.
+Routes import these helpers directly and never import the application entry
+point. Account deletion deliberately uses its deletion-aware lookup so an
+interrupted deletion can resume while the account is tombstoned.
+
+The refactor preserves public URLs, methods, response formats, account isolation,
+credential encryption, and CORS behaviour. `tests/fixtures/api_contract.json`
+records the route inventory and API index immediately before extraction;
+`test_app_factory.py` verifies that contract, independent app configurations,
+request logging, authentication guards, CORS preflight, and JSON error handlers.
+Update the fixture only for intentional public API changes.
+
 ```text
 .
+├── app.py                       # Application factory, shared setup, local entry point
+├── routes/
+│   ├── __init__.py              # Feature blueprint registration
+│   ├── auth.py                  # Registration, login, profile, account deletion
+│   ├── ai_settings.py           # Shared AI model settings and encrypted credentials
+│   ├── nutrition.py             # Meal analysis, recommendations, entries
+│   ├── push.py                  # Push settings, subscriptions, scheduler dispatch
+│   ├── habits.py                # Habit tracking and reviewable AI drafts
+│   ├── garmin.py                # Garmin connection, cached steps, refresh
+│   └── health.py                # Health check and API index
 ├── core/
 │   ├── auth_service.py          # Password hashing and JWT handling
+│   ├── request_auth.py          # Shared request identity and current account checks
 │   ├── nutrition_service.py     # Nutrition-entry validation
 │   ├── habit_service.py         # Habit validation, schedules, and streaks
 │   ├── habit_icons.py           # Shared allowed icon catalog
-│   ├── flashcard_service.py     # Flashcard validation and spaced-repetition scheduling
 │   └── push_service.py          # Web Push settings/subscription validation
 ├── services/
 │   ├── firebase/                # Firestore persistence by data type
 │   ├── credential_service.py    # Cloud KMS encryption and decryption
+│   ├── ai_credentials.py        # Shared AI selection, AAD versions, billing messages
 │   ├── ai_catalog.py            # Allowlisted providers and models
-│   ├── ai_contract.py           # Shared prompts and structured response schemas, including Minerva's
+│   ├── ai_contract.py           # Shared meal and habit prompts and structured response schemas
 │   ├── ai_service.py            # Provider-neutral request dispatch
 │   ├── ai_errors.py             # Shared AI error mapping
 │   ├── ai_validation.py         # Shared AI response validation
-│   ├── anthropic_service.py      # Anthropic key verification and meal/habit/Minerva generation
+│   ├── anthropic_service.py      # Anthropic key verification and meal/habit generation
 │   ├── logging_service.py       # Console logging
-│   ├── mistral_service.py       # Mistral key verification and meal/habit/Minerva generation
-│   ├── openai_service.py        # OpenAI key verification and meal/habit/Minerva generation
+│   ├── mistral_service.py       # Mistral key verification and meal/habit generation
+│   ├── openai_service.py        # OpenAI key verification and meal/habit generation
 │   └── web_push_service.py      # VAPID signing and Web Push dispatch
 ├── tests/                       # Unit and API tests
-├── app.py                       # Flask application and routes
 ├── Dockerfile
 └── requirements.txt
 ```
@@ -398,7 +424,7 @@ The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, `ANTHROPIC_MODEL`, and `AI_
 ## Related projects
 
 - [Aether](https://github.com/DonalGeraghty/aether) — React frontend for habit tracking and AI-assisted habit creation
-- [Minerva](https://github.com/DonalGeraghty/minerva) — React frontend for AI-assisted flashcards
+- [Minerva](https://github.com/DonalGeraghty/minerva) — React frontend for personal Garmin data
 - [Nyx](https://github.com/DonalGeraghty/nyx) — React frontend for nutrition tracking
 
 ## Overall architecture
@@ -422,5 +448,5 @@ Nyx (React/Vite, Cloud Run)      ─┘                                 │     
 - Each frontend is a static Vite build served by nginx in its own container (Node build stage, then `nginx:alpine`, port `8080`, with a `/health` endpoint), deployed from its own Artifact Registry repository (`aether`, `minerva`, `nyx`) by its own `deploy-gcp.yml` GitHub Actions workflow. Those workflows build, push, then `gcloud run deploy`, preferring Workload Identity Federation with a `GCP_SA_KEY` secret as a fallback.
 - Janus API deploys differently: `.github/workflows/deploy.yml` runs `gcloud run deploy --source .`, which lets Cloud Build produce the container directly from source, so there is no separate Artifact Registry push step and no Workload Identity Federation — authentication uses only the static `GCP_SA_KEY` secret.
 - Every frontend points at this service via a `VITE_JANUS_API_URL` build-time variable (defaulting to the deployed Janus API URL). Because all three frontends talk to the same Janus API deployment and Firestore project, a single account's credentials, selected AI provider/model, and login session are shared across Aether, Minerva, and Nyx.
-- Each frontend calls its own product endpoints (Aether → `/api/habits/*` and habit label/check-in endpoints, Nyx → `/api/nutrition/*`, Minerva → `/api/minerva/*` and `/api/flashcards/*`) plus shared authentication and AI-credential endpoints. Workout history is retained only for legacy-data cleanup.
+- Each frontend calls its own product endpoints (Aether → `/api/habits/*` and habit label/check-in endpoints, Nyx → `/api/nutrition/*`, Minerva → `/api/garmin/*`) plus shared authentication and AI-credential endpoints. Workout and flashcard history are retained only for legacy-data cleanup.
 - Two pieces of infrastructure still carry pre-rename names from when this service only served Nyx: the KMS keyring `janus-gate` (kept because existing encrypted credentials are bound to its resource name) and the Cloud Scheduler job `nyx-push-reminders` (renaming it has no functional benefit, since it now dispatches reminders for every app's users).

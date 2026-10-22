@@ -1,0 +1,280 @@
+{
+  "routes": [
+    {
+      "path": "/",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/auth/account",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/api/auth/login",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/auth/me",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/auth/register",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/garmin/connection",
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/garmin/data/steps",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/garmin/refresh",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/habit-<kind>",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/habit-<kind>/<item_id>",
+      "methods": [
+        "DELETE",
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/habit-checkins",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/habits",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/habits",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/habits/<habit_id>",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/api/habits/<habit_id>",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/habits/<habit_id>/checkins/<day>",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/habits/draft",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/habits/settings",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/internal/push/reminders",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/nutrition/analyze",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/nutrition/entries",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/nutrition/entries",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/nutrition/entries/<entry_id>",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/api/nutrition/entries/<entry_id>",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/nutrition/recommend",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/user/ai-credentials/<provider>",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/api/user/ai-credentials/<provider>",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/user/ai-credentials/<provider>",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/user/ai-settings",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/user/ai-settings",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/user/openai-key",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/api/user/openai-key",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/user/openai-key",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/user/push-settings",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/user/push-settings",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/user/push-subscriptions",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/api/user/push-subscriptions",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/health",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/static/<path:filename>",
+      "methods": [
+        "GET"
+      ]
+    }
+  ],
+  "index": {
+    "endpoints": {
+      "add_push_subscription": "POST /api/user/push-subscriptions",
+      "analyze_meal": "POST /api/nutrition/analyze",
+      "create_nutrition_entry": "POST /api/nutrition/entries",
+      "current_user": "GET /api/auth/me",
+      "delete_account": "DELETE /api/auth/account",
+      "delete_ai_credential": "DELETE /api/user/ai-credentials/{provider}",
+      "delete_nutrition_entry": "DELETE /api/nutrition/entries/{entry_id}",
+      "delete_openai_key": "DELETE /api/user/openai-key",
+      "delete_push_subscription": "DELETE /api/user/push-subscriptions",
+      "disconnect_garmin": "DELETE /api/garmin/connection",
+      "draft_habits": "POST /api/habits/draft",
+      "get_ai_credential_status": "GET /api/user/ai-credentials/{provider}",
+      "get_ai_settings": "GET /api/user/ai-settings",
+      "get_garmin_connection": "GET /api/garmin/connection",
+      "get_garmin_steps": "GET /api/garmin/data/steps?start=YYYY-MM-DD&end=YYYY-MM-DD",
+      "get_openai_key_status": "GET /api/user/openai-key",
+      "get_push_settings": "GET /api/user/push-settings",
+      "habit": "PUT/DELETE /api/habits/{habit_id}",
+      "habit_checkins": "GET /api/habit-checkins; PUT /api/habits/{habit_id}/checkins/{date}",
+      "habit_labels": "POST /api/habit-categories|habit-groups; PUT/DELETE /api/habit-categories|habit-groups/{id}",
+      "habit_settings": "PUT /api/habits/settings",
+      "habits": "GET/POST /api/habits",
+      "health": "GET /health",
+      "list_nutrition_entries": "GET /api/nutrition/entries",
+      "login": "POST /api/auth/login",
+      "recommend_meals": "POST /api/nutrition/recommend",
+      "refresh_garmin_steps": "POST /api/garmin/refresh",
+      "register": "POST /api/auth/register",
+      "set_ai_credential": "PUT /api/user/ai-credentials/{provider}",
+      "set_ai_settings": "PUT /api/user/ai-settings",
+      "set_garmin_connection": "PUT /api/garmin/connection",
+      "set_openai_key": "PUT /api/user/openai-key",
+      "set_push_settings": "PUT /api/user/push-settings",
+      "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}"
+    },
+    "service": "Janus API"
+  }
+}

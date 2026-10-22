@@ -121,16 +121,16 @@ class HabitApiTests(unittest.TestCase):
 
     def test_ai_drafts_use_account_context_without_saving(self):
         self.create()
-        with patch('app._selected_ai_credential', return_value=({'provider': 'openai', 'model': 'gpt-5.6-sol'}, None, None)):
+        with patch('routes.habits.selected_ai_credential', return_value=({'provider': 'openai', 'model': 'gpt-5.6-sol'}, None, None)):
             self.assertEqual(self.client.post('/api/habits/draft', headers=self.headers, json={'message': 'Help me read'}).status_code, 409)
         draft = {'summary': 'A simple evening routine.', 'habits': [{'name': 'Stretch', 'description': 'Stretch briefly before bed.', 'icon': 'leaf', 'colour': '#a5c9ad', 'days': [0, 2, 4], 'category': 'Health', 'group': 'Evening'}]}
-        with patch('app._selected_ai_credential', return_value=({'provider': 'mistral', 'model': 'mistral-small-2603'}, {'ciphertext': 'encrypted', 'aad_version': 2}, None)), patch('app.decrypt_api_key', return_value='key'), patch('habit_routes.draft_habits', return_value=draft) as generate:
+        with patch('routes.habits.selected_ai_credential', return_value=({'provider': 'mistral', 'model': 'mistral-small-2603'}, {'ciphertext': 'encrypted', 'aad_version': 2}, None)), patch('routes.habits.decrypt_api_key', return_value='key'), patch('routes.habits.draft_habits', return_value=draft) as generate:
             result = self.client.post('/api/habits/draft', headers=self.headers, json={'message': 'Build an evening routine'})
         self.assertEqual(result.status_code, 200, result.get_json())
         self.assertEqual(generate.call_args.args[1]['habits'][0]['name'], 'Read')
         self.assertEqual(generate.call_args.args[-2:], ('mistral', 'mistral-small-2603'))
         self.assertEqual(len(self.client.get('/api/habits', headers=self.headers).get_json()['habits']), 1)
-        with patch('app._selected_ai_credential', return_value=({'provider': 'openai', 'model': 'gpt-5.6-sol'}, {'ciphertext': 'encrypted'}, None)), patch('app.decrypt_api_key', return_value='key'), patch('habit_routes.draft_habits', side_effect=AIBillingError('credit')):
+        with patch('routes.habits.selected_ai_credential', return_value=({'provider': 'openai', 'model': 'gpt-5.6-sol'}, {'ciphertext': 'encrypted'}, None)), patch('routes.habits.decrypt_api_key', return_value='key'), patch('routes.habits.draft_habits', side_effect=AIBillingError('credit')):
             result = self.client.post('/api/habits/draft', headers=self.headers, json={'message': 'Read'})
         self.assertEqual(result.status_code, 402)
 

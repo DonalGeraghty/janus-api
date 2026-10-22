@@ -14,14 +14,10 @@ from pydantic import ValidationError
 
 from .ai_contract import (
     MAX_MEAL_MESSAGE_LENGTH,
-    MAX_MINERVA_MESSAGE_LENGTH,
     MEAL_ANALYSIS_PROMPT,
     MEAL_RECOMMENDATION_PROMPT,
-    MINERVA_PROMPT,
     MealAnalysis,
     MealRecommendation,
-    MinervaResponse,
-    minerva_user_message,
 )
 from .ai_errors import (
     AIAuthenticationError,
@@ -40,7 +36,6 @@ GENERATION_MAX_RETRIES = 1
 # Claude 5 counts adaptive-thinking tokens against these hard output ceilings.
 MEAL_ANALYSIS_MAX_TOKENS = 4_096
 MEAL_RECOMMENDATION_MAX_TOKENS = 8_192
-MINERVA_MAX_TOKENS = 4_096
 
 
 class AnthropicAuthenticationError(AIAuthenticationError):
@@ -290,40 +285,3 @@ def recommend_meals(context, email, api_key, model=None):
         ),
     })
     return result
-
-
-def respond_minerva(message, email, api_key, model=None, existing_cards=None):
-    if not isinstance(message, str) or not message.strip():
-        raise ValueError("message_required")
-    message = message.strip()
-    if len(message) > MAX_MINERVA_MESSAGE_LENGTH:
-        raise ValueError("message_too_long")
-    provider_message = minerva_user_message(message, existing_cards)
-    model = _model_name(model)
-
-    try:
-        with Anthropic(
-            api_key=api_key,
-            max_retries=GENERATION_MAX_RETRIES,
-            timeout=GENERATION_TIMEOUT_SECONDS,
-        ) as client:
-            response = client.messages.parse(
-                model=model,
-                max_tokens=MINERVA_MAX_TOKENS,
-                system=MINERVA_PROMPT,
-                messages=[{"role": "user", "content": provider_message}],
-                output_format=MinervaResponse,
-            )
-        result = _parsed_response(
-            response,
-            MinervaResponse,
-            "Anthropic returned no Minerva response",
-        )
-    except (
-        AnthropicError,
-        ValidationError,
-        json.JSONDecodeError,
-        TypeError,
-    ) as error:
-        _raise_mapped_anthropic_error(error)
-    return result.model_dump()
