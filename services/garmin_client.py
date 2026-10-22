@@ -3,6 +3,7 @@
 import json
 import math
 import logging
+import re
 import time
 from http.client import HTTPException
 from datetime import datetime, timezone
@@ -19,6 +20,11 @@ BASE_URL = "https://personal.connectapi.garmin.com"
 TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token"
 MAX_RESPONSE_BYTES = 256 * 1024
 logger = logging.getLogger("janus-api.garmin.client")
+
+
+def _endpoint_label(path):
+    path = re.sub(r"/\d{4}-\d{2}-\d{2}(?=/|$)", "/{date}", path.split("?", 1)[0])
+    return re.sub(r"/[0-9]+(?=/|$)", "/{id}", path)
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -48,15 +54,17 @@ def _request(path, authorization, method="GET"):
         return body.decode("utf-8")
     except HTTPError as error:
         logger.warning("Garmin upstream failure endpoint=%s status=%s duration_ms=%.0f",
-                       path.split("?", 1)[0], error.code, (time.monotonic() - started) * 1000)
+                       _endpoint_label(path), error.code, (time.monotonic() - started) * 1000)
         if error.code in (401, 403):
             raise GarminError("garmin_reconnect_required", "Garmin rejected this connection. Replace your personal API key.", 409) from None
         if error.code == 429:
             raise GarminError("garmin_rate_limited", "Garmin is rate limiting requests. Try again later.", 429, _retry_delay(error.headers.get("Retry-After"))) from None
+        if error.code == 404 and path.startswith("/activity-service/activity/"):
+            raise GarminError("garmin_not_found", "This Garmin activity is no longer available.", 404) from None
         raise GarminError("garmin_unavailable", "Garmin is temporarily unavailable.") from None
     except (URLError, OSError, UnicodeError, ValueError, HTTPException):
         logger.warning("Garmin upstream transport failure endpoint=%s duration_ms=%.0f",
-                       path.split("?", 1)[0], (time.monotonic() - started) * 1000)
+                       _endpoint_label(path), (time.monotonic() - started) * 1000)
         raise GarminError("garmin_unavailable", "Could not reach Garmin. Try again later.") from None
 
 
@@ -98,7 +106,8 @@ def fetch_steps(token, start, end):
 
 def _json_response(path, token):
     try:
-        return json.loads(_request(path, f"Bearer {token}"))
+        body = _request(path, f"Bearer {token}")
+        return json.loads(body) if body.strip() else None
     except ValueError:
         raise GarminError("garmin_invalid_response", "Garmin returned unexpected data.") from None
 

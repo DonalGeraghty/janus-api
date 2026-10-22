@@ -4,6 +4,8 @@ from flask import Blueprint, g, jsonify, request
 from services import garmin_service
 from services.garmin_errors import GarminError
 from core.request_auth import authenticated_identity
+from services.garmin_catalog import HEALTH_RESOURCES, PANEL_IDS
+from services.firebase.garmin import preferences as stored_preferences
 
 
 blueprint = Blueprint("garmin", __name__, url_prefix="/api/garmin")
@@ -47,6 +49,39 @@ def connection():
         result = {"configured": False}
     return jsonify(status="success", connection=result)
 
+
+@blueprint.route("/preferences", methods=["GET", "PUT"])
+def preferences():
+    panels = None
+    if request.method == "PUT":
+        body = request.get_json(silent=True)
+        if (not isinstance(body, dict) or set(body) != {"visible_panels"}
+                or not isinstance(body["visible_panels"], list)
+                or len(body["visible_panels"]) > len(PANEL_IDS)
+                or any(not isinstance(panel, str) or panel not in PANEL_IDS for panel in body["visible_panels"])
+                or len(set(body["visible_panels"])) != len(body["visible_panels"])):
+            raise GarminError("invalid_preferences", "Select valid dashboard panels without duplicates.", 400)
+        panels = body["visible_panels"]
+    return jsonify(status="success", preferences=stored_preferences(*identity(), panels))
+
+
+@blueprint.get("/data/<resource>")
+def health_resource(resource):
+    if resource not in HEALTH_RESOURCES:
+        raise GarminError("invalid_resource", "Unknown Garmin resource.", 404)
+    if set(request.args) != {"start", "end"} or any(len(request.args.getlist(key)) != 1 for key in request.args):
+        raise GarminError("invalid_request", "Provide start and end dates only.", 400)
+    return jsonify(status="success", **garmin_service.get_health(*identity(), resource, request.args["start"], request.args["end"]))
+
+
+@blueprint.route("/activities/<int:activity_id>", methods=["GET", "POST"])
+@blueprint.route("/activities/<int:activity_id>/workouts", methods=["GET", "POST"])
+def activity_detail(activity_id):
+    if request.args or request.get_data():
+        raise GarminError("invalid_request", "This activity request accepts no additional parameters.", 400)
+    return jsonify(status="success", **garmin_service.get_activity(*identity(), activity_id,
+                    workouts=request.path.endswith("/workouts"), force=request.method == "POST"))
+
 @blueprint.get("/data/steps")
 def steps():
     if set(request.args) != {"start", "end"} or any(len(request.args.getlist(k)) != 1 for k in request.args):
@@ -82,12 +117,15 @@ def refresh():
     body = request.get_json(silent=True)
     if (not isinstance(body, dict) or not {"resources", "start", "end"} <= set(body) <= {"resources", "start", "end", "limit"}
             or not isinstance(body["resources"], list) or len(body["resources"]) != 1
-            or body["resources"][0] not in ("steps", "sleep", "activities")):
-        raise GarminError("invalid_request", "Select one of steps, sleep, or activities and provide start and end dates.", 400)
+            or not isinstance(body["resources"][0], str)
+            or body["resources"][0] not in PANEL_IDS):
+        raise GarminError("invalid_request", "Select one Garmin resource and provide start and end dates.", 400)
     resource = body["resources"][0]
     if resource != "activities" and "limit" in body:
         raise GarminError("invalid_request", "Only activities accepts a limit.", 400)
-    if resource == "sleep":
+    if resource in HEALTH_RESOURCES:
+        result = garmin_service.get_health(*identity(), resource, body["start"], body["end"], force=True)
+    elif resource == "sleep":
         if body["start"] == body["end"]:
             result = garmin_service.get_sleep(*identity(), body["start"], force=True)
         else:

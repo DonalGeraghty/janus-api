@@ -1,6 +1,7 @@
 """Transactional Garmin storage. No plaintext or process-memory fallback."""
 
 from uuid import uuid4
+import re
 
 from firebase_admin import firestore
 
@@ -8,6 +9,7 @@ from . import db_state
 from .core import normalize_user_email
 from .account_state import ACCOUNT_DELETION_FIELD, ACCOUNT_DELETION_TOKEN_FIELD, account_id_matches
 from ..garmin_errors import GarminError
+from ..garmin_catalog import PANEL_IDS
 
 
 def _validate_account(data, account_id):
@@ -35,7 +37,7 @@ def _apply(transaction, user_ref, connection_ref, cache_ref, account_id, action,
     if not connection.get("configured"):
         raise GarminError("garmin_connection_required", "Connect Garmin in Account to view your data.", 409)
     resource = values.get("resource", "steps")
-    if resource not in ("steps", "sleep", "activities"):
+    if resource not in PANEL_IDS and not re.fullmatch(r"activity-(?:summary|workouts):[1-9][0-9]{0,18}", resource):
         raise ValueError("Unknown Garmin resource")
     locks = dict(connection.get("resource_locks") or {})
     lock = dict(locks.get(resource) or {})
@@ -74,6 +76,34 @@ def execute(email, account_id, action="read", cache_id=None, **values):
         raise
     except Exception:
         raise GarminError("garmin_storage_unavailable", "Secure Garmin storage is unavailable.", 503) from None
+
+
+def preferences(email, account_id, visible_panels=None):
+    """Account-owned preferences survive connection replacement and watch changes."""
+    if db_state.db is None or db_state.users_collection_ref is None:
+        raise GarminError("garmin_storage_unavailable", "Dashboard preferences are unavailable.", 503)
+    user_ref = db_state.users_collection_ref.document(normalize_user_email(email))
+    settings_ref = user_ref.collection("garmin_settings").document("dashboard")
+
+    def apply(transaction):
+        user = user_ref.get(transaction=transaction)
+        _validate_account(user.to_dict() if user.exists else None, account_id)
+        snapshot = settings_ref.get(transaction=transaction)
+        stored = snapshot.to_dict() if snapshot.exists else {}
+        if visible_panels is not None:
+            transaction.set(settings_ref, {"account_id": account_id, "visible_panels": visible_panels})
+            return {"visible_panels": visible_panels}
+        panels = stored.get("visible_panels") if stored and stored.get("account_id") == account_id else None
+        if not isinstance(panels, list) or any(panel not in PANEL_IDS for panel in panels):
+            panels = list(PANEL_IDS)
+        return {"visible_panels": panels}
+
+    try:
+        return firestore.transactional(apply)(db_state.db.transaction())
+    except GarminError:
+        raise
+    except Exception:
+        raise GarminError("garmin_storage_unavailable", "Dashboard preferences are unavailable.", 503) from None
 
 
 def delete_garmin_account_data(email, account_id, deletion_token):

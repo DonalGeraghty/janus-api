@@ -31,11 +31,31 @@
       ]
     },
     {
+      "path": "/api/garmin/activities/<int:activity_id>",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/garmin/activities/<int:activity_id>/workouts",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
       "path": "/api/garmin/connection",
       "methods": [
         "DELETE",
         "GET",
         "PUT"
+      ]
+    },
+    {
+      "path": "/api/garmin/data/<resource>",
+      "methods": [
+        "GET"
       ]
     },
     {
@@ -54,6 +74,13 @@
       "path": "/api/garmin/data/steps",
       "methods": [
         "GET"
+      ]
+    },
+    {
+      "path": "/api/garmin/preferences",
+      "methods": [
+        "GET",
+        "PUT"
       ]
     },
     {
@@ -287,7 +314,12 @@
       "set_push_settings": "PUT /api/user/push-settings",
       "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}",
       "get_garmin_sleep": "GET /api/garmin/data/sleep?date=YYYY-MM-DD",
-      "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5"
+      "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5",
+      "get_garmin_health": "GET /api/garmin/data/{resource}?start=YYYY-MM-DD&end=YYYY-MM-DD",
+      "get_garmin_preferences": "GET /api/garmin/preferences",
+      "set_garmin_preferences": "PUT /api/garmin/preferences",
+      "get_garmin_activity": "GET /api/garmin/activities/{activity_id}",
+      "get_garmin_workouts": "GET /api/garmin/activities/{activity_id}/workouts"
     },
     "service": "Janus API"
   }
