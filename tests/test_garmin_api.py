@@ -3,7 +3,7 @@
 import json
 import time
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
@@ -76,6 +76,7 @@ class GarminIntegrationTests(unittest.TestCase):
             patch("core.request_auth.get_user_record", side_effect=lambda email: self.records.get(f"users/{email}")),
             patch("services.garmin_client.fetch_sleep", return_value=SLEEP),
             patch("services.garmin_client.fetch_activities", return_value=ACTIVITIES),
+            patch("services.garmin_client.fetch_sleep_history", return_value=[SLEEP]),
         ]
         self.mocks = [item.start() for item in self.patches]
         self.addCleanup(lambda: [item.stop() for item in reversed(self.patches)])
@@ -297,7 +298,14 @@ class GarminIntegrationTests(unittest.TestCase):
         original = self.sleep().json
         self.allow_refresh("sleep")
         self.mocks[9].side_effect = GarminError("garmin_unavailable", "Sleep unavailable")
-        saved = self.sleep(refresh=True)
+        with self.assertLogs("janus-api.garmin", level="WARNING") as logs:
+            saved = self.sleep(refresh=True)
+        logged = " ".join(logs.output)
+        self.assertIn("resource=sleep", logged)
+        self.assertIn("cached_fallback=True", logged)
+        self.assertIn("code=garmin_unavailable", logged)
+        for secret in (EMAIL, ACCOUNT, KEY, TOKEN, "27000"):
+            self.assertNotIn(secret, logged)
         self.assertEqual(saved.json["data"], SLEEP)
         self.assertTrue(saved.json["meta"]["stale"])
         self.assertEqual(saved.json["meta"]["fetched_at"], original["meta"]["fetched_at"])
@@ -338,6 +346,25 @@ class GarminIntegrationTests(unittest.TestCase):
         self.assertEqual(self.sleep().json["meta"]["source"], "cache")
         self.assertEqual(self.activities().json["data"], [])
 
+    def test_sleep_history_caches_and_refreshes_empty_result_when_watch_syncs(self):
+        self.connect()
+        start = (date.fromisoformat(DAY) - timedelta(days=6)).isoformat()
+        path = f"/api/garmin/data/sleep?start={start}&end={DAY}"
+        self.mocks[11].return_value = []
+        first = self.client.get(path, headers=self.headers)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json["data"], [])
+        self.assertEqual(self.client.get(path, headers=self.headers).json["meta"]["source"], "cache")
+        self.mocks[11].assert_called_once_with(TOKEN, start, DAY)
+        self.allow_refresh("sleep")
+        self.mocks[11].return_value = [SLEEP]
+        refreshed = self.client.post("/api/garmin/refresh", headers=self.headers,
+                                     json={"resources": ["sleep"], "start": start, "end": DAY})
+        self.assertEqual(refreshed.status_code, 200)
+        self.assertEqual(refreshed.json["data"], [SLEEP])
+        self.mocks[9].assert_not_called()
+        self.assertEqual(self.client.get(path, headers=self.headers).json["data"], [SLEEP])
+
     def test_activity_limits_have_separate_cache_entries(self):
         self.connect()
         self.assertEqual(self.activities(5).status_code, 200)
@@ -351,13 +378,46 @@ class GarminIntegrationTests(unittest.TestCase):
         for path in ("/data/sleep?date=bad", f"/data/sleep?date={DAY}&date={DAY}",
                      f"/data/sleep?date={DAY}&url=https://example.com", f"/data/activities?start={DAY}&end={DAY}&limit=21"):
             self.assertEqual(self.client.get('/api/garmin' + path, headers=self.headers).status_code, 400)
-        for body in ({"resources": ["sleep"], "start": "2026-01-01", "end": "2026-01-02"},
+        for body in ({"resources": ["sleep"], "start": "2026-01-01", "end": "2026-02-02"},
                      {"resources": ["activities"], "start": DAY, "end": DAY, "limit": True},
                      {"resources": ["sleep", "steps"], "start": DAY, "end": DAY}):
             self.assertEqual(self.client.post('/api/garmin/refresh', headers=self.headers, json=body).status_code, 400)
 
 
 class GarminClientTests(unittest.TestCase):
+    def test_sleep_history_uses_one_range_request_and_handles_missing_nights(self):
+        records = [{**SLEEP, "calendarDate": "2026-10-22"}, {"calendarDate": None},
+                   {**SLEEP, "calendarDate": "2026-10-20"}]
+        with patch.object(garmin_client, "_request", return_value=json.dumps(records)) as upstream:
+            result = garmin_client.fetch_sleep_history(TOKEN, "2026-10-16", "2026-10-22")
+        self.assertEqual([row["calendarDate"] for row in result], ["2026-10-20", "2026-10-22"])
+        self.assertIn("dailySleepSummariesByDate?startDate=2026-10-16&endDate=2026-10-22", upstream.call_args.args[0])
+        upstream.assert_called_once()
+        for records in ([], None):
+            with patch.object(garmin_client, "_request", return_value=json.dumps(records)):
+                self.assertEqual(garmin_client.fetch_sleep_history(TOKEN, DAY, DAY), [])
+
+    def test_sleep_history_rejects_invalid_duplicate_and_outside_dates(self):
+        for records in ({}, [None], [SLEEP, SLEEP], [{**SLEEP, "calendarDate": "wrong"}],
+                        [{**SLEEP, "calendarDate": "2025-01-01"}], [{**SLEEP, "sleepTimeSeconds": True}]):
+            with self.subTest(records=records), patch.object(garmin_client, "_request", return_value=json.dumps(records)):
+                with self.assertRaises(GarminError):
+                    garmin_client.fetch_sleep_history(TOKEN, DAY, DAY)
+
+    def test_sleep_without_a_record_for_selected_date_returns_no_data(self):
+        for payload in (
+            {},
+            {"dailySleepDTO": None},
+            {"dailySleepDTO": {}},
+            {"calendarDate": None},
+            {"calendarDate": "", "sleepTimeSeconds": 0},
+            {**SLEEP, "calendarDate": "2026-01-01"},
+            {"dailySleepDTO": {"calendarDate": None}},
+            {"dailySleepDTO": {**SLEEP, "calendarDate": "2026-01-01"}},
+        ):
+            with self.subTest(payload=payload), patch.object(garmin_client, "_request", return_value=json.dumps(payload)):
+                self.assertIsNone(garmin_client.fetch_sleep(TOKEN, DAY))
+
     def test_sleep_validation_identifies_field_without_exposing_response_values(self):
         for payload, field in (
             ([], "response object"),

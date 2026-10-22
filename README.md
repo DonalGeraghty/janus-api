@@ -13,10 +13,11 @@ Minerva has steps, sleep, and recent activity cards, plus Account connection con
 | `DELETE` | `/api/garmin/connection` | Remove stored secrets and stop requests; retain saved history |
 | `GET` | `/api/garmin/data/steps?start=YYYY-MM-DD&end=YYYY-MM-DD` | Read daily steps for at most 28 inclusive days |
 | `GET` | `/api/garmin/data/sleep?date=YYYY-MM-DD` | Main sleep details for one Garmin calendar date |
+| `GET` | `/api/garmin/data/sleep?start=YYYY-MM-DD&end=YYYY-MM-DD` | Sleep history array for at most 28 inclusive days; Minerva requests seven |
 | `GET` | `/api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5` | Latest summaries, descending by local start, over at most 28 inclusive days; limit 1–20 |
 | `POST` | `/api/garmin/refresh` | Force one resource to refresh with `{ "resources": ["steps"], "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" }`; select `steps`, `sleep`, or `activities` |
 
-Sleep refreshes require equal start/end dates. Only activity refreshes accept an optional integer `limit` (default 5). Activity searches use upstream offset zero, descending local start time, and exclude multisport child activities. The overview displays five records over the 28 days ending on the selected date. Returned fields remain available for inspection, subject to the bounded response size.
+Sleep refreshes with different start/end dates refresh the history array using one Garmin `dailySleepSummariesByDate` request. Equal start/end dates retain the single-day response. History and single-day caches are distinct and share the sleep refresh cooldown. Only activity refreshes accept an optional integer `limit` (default 5). Activity searches use upstream offset zero, descending local start time, and exclude multisport child activities. The overview displays five records over the 28 days ending on the selected date. Returned fields remain available for inspection, subject to the bounded response size.
 
 All routes require a current Janus bearer token and return `Cache-Control: no-store`. Garmin authentication failures use `409 garmin_reconnect_required`, separately from Janus login failures (`401`). Upstream secrets and error bodies are never returned.
 
@@ -27,6 +28,10 @@ Resource responses have `data` and `meta` fields. Metadata includes epoch-second
 Resource-scoped refresh leases prevent overlapping requests for the same card across Cloud Run instances. Each resource has a minimum 10-second cooldown, while actual Garmin rate limits apply shared connection-wide backoff. A sleep outage does not block steps or activities. Upstream `Retry-After` delays are honoured. Manual refresh respects these controls. Connection replacement/disconnection and account deletion invalidate in-flight writes. Reconnecting uses a new cache generation, so old history cannot appear as the new connection's data. Account deletion also removes Garmin secrets, cached data, and any Garmin settings records. Disconnecting locally does not revoke the personal key at Garmin.
 
 Run the synthetic integration tests with `python -m unittest discover -s tests -p test_garmin_api.py`, and the full suite with `python -m unittest discover -s tests`. A live smoke test requires configured Firestore/KMS access and a personal key entered through Minerva's Account page. See [Garmin's authentication instructions](https://developer.garmin.com/gc-developer-program/personal/personal-api/) for the token exchange.
+
+Empty sleep records, empty calendar dates, and valid records belonging to another day return successful `data: null` responses for the selected date. Minerva displays its no-sleep message. These results use the normal cache and can be refreshed once a watch sync supplies data; malformed records still return a safe validation error.
+
+Garmin diagnostics go to the existing Cloud Run application logs (stderr). Search for `Garmin` in the Janus service logs to see resource/error codes, safe validation reasons, cached-fallback decisions, upstream HTTP failures, and upstream failure duration. Empty or mismatched sleep dates log a fixed reason without date values. Logs exclude credentials, user identifiers, and raw Garmin health data. No additional logging service is required.
 
 ## Retired flashcard functionality
 
