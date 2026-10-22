@@ -1,4 +1,4 @@
-"""Garmin connection lifecycle and the first cached resource: daily steps."""
+"""Garmin connection lifecycle and independent cached dashboard resources."""
 
 import hashlib
 import time
@@ -70,11 +70,30 @@ def _envelope(cache, source, now, warning=None):
 
 def get_steps(email, account_id, start, end, force=False):
     validate_range(start, end)
+    return _get_resource(email, account_id, "steps", start, end,
+                         lambda token: garmin_client.fetch_steps(token, start, end), force)
+
+
+def get_sleep(email, account_id, day, force=False):
+    validate_range(day, day)
+    return _get_resource(email, account_id, "sleep", day, day,
+                         lambda token: garmin_client.fetch_sleep(token, day), force)
+
+
+def get_activities(email, account_id, start, end, limit=5, force=False):
+    validate_range(start, end)
+    if type(limit) is not int or not 1 <= limit <= 20:
+        raise GarminError("invalid_limit", "Activity limit must be an integer from 1 to 20.", 400)
+    return _get_resource(email, account_id, "activities", start, end,
+                         lambda token: garmin_client.fetch_activities(token, start, end, limit), force, f":{limit}")
+
+
+def _get_resource(email, account_id, resource, start, end, fetch, force=False, variant=""):
     connection, _ = execute(email, account_id)
     if not connection.get("configured"):
         raise GarminError("garmin_connection_required", "Connect Garmin in Account to view your data.", 409)
     generation = connection["generation"]
-    cache_id = hashlib.sha256(f"steps:v1:{generation}:{start}:{end}".encode()).hexdigest()
+    cache_id = hashlib.sha256(f"{resource}:v1:{generation}:{start}:{end}{variant}".encode()).hexdigest()
     current, cache = execute(email, account_id, cache_id=cache_id)
     if current.get("generation") != generation:
         raise GarminError("garmin_connection_changed", "The Garmin connection changed. Try again.", 409)
@@ -83,7 +102,7 @@ def get_steps(email, account_id, start, end, force=False):
         return _envelope(cache, "cache", now)
     lease_id = uuid4().hex
     try:
-        execute(email, account_id, "claim", generation=generation, now=now, lease_id=lease_id)
+        execute(email, account_id, "claim", generation=generation, resource=resource, now=now, lease_id=lease_id)
     except GarminError as error:
         if cache and error.code in ("garmin_rate_limited", "garmin_reconnect_required"):
             return _envelope(cache, "cache", now, error)
@@ -96,18 +115,23 @@ def get_steps(email, account_id, start, end, force=False):
             updates = {"token_ciphertext": _crypt(encrypt_api_key, token, email, account_id, generation, "token"), "token_expires_at": expires_at}
         else:
             token = _crypt(decrypt_api_key, current["token_ciphertext"], email, account_id, generation, "token")
-        data = garmin_client.fetch_steps(token, start, end)
+        data = fetch(token)
     except GarminError as error:
         finished = time.time()
-        updates.update({"retry_at": finished + max(10, error.retry_after), "reconnect_required": error.code == "garmin_reconnect_required"})
-        execute(email, account_id, "finish", cache_id=cache_id, generation=generation, lease_id=lease_id, updates=updates)
+        error.retry_after = max(10, error.retry_after)
+        if error.code == "garmin_rate_limited":
+            updates["retry_at"] = finished + max(10, error.retry_after)
+        if error.code == "garmin_reconnect_required":
+            updates["reconnect_required"] = True
+        execute(email, account_id, "finish", cache_id=cache_id, generation=generation, resource=resource,
+                lease_id=lease_id, retry_at=finished + max(10, error.retry_after), updates=updates)
         if cache:
             return _envelope(cache, "cache", finished, error)
         raise
     finished = time.time()
     # Recent and current records are mutable; older ranges can be reused longer.
     seconds = 900 if date.fromisoformat(end) >= datetime.now(timezone.utc).date() - timedelta(days=4) else 86400
-    saved = {"data": data, "fetched_at": finished, "fresh_until": finished + seconds, "account_id": account_id, "generation": generation, "resource": "steps", "start": start, "end": end}
-    execute(email, account_id, "finish", cache_id=cache_id, generation=generation, lease_id=lease_id,
-            updates={**updates, "retry_at": finished + 10, "reconnect_required": False}, cache=saved)
+    saved = {"data": data, "fetched_at": finished, "fresh_until": finished + seconds, "account_id": account_id, "generation": generation, "resource": resource, "start": start, "end": end}
+    execute(email, account_id, "finish", cache_id=cache_id, generation=generation, resource=resource,
+            lease_id=lease_id, retry_at=finished + 10, updates=updates, cache=saved)
     return _envelope(saved, "garmin", finished)

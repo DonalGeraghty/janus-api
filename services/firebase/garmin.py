@@ -34,19 +34,27 @@ def _apply(transaction, user_ref, connection_ref, cache_ref, account_id, action,
         return None
     if not connection.get("configured"):
         raise GarminError("garmin_connection_required", "Connect Garmin in Account to view your data.", 409)
+    resource = values.get("resource", "steps")
+    if resource not in ("steps", "sleep", "activities"):
+        raise ValueError("Unknown Garmin resource")
+    locks = dict(connection.get("resource_locks") or {})
+    lock = dict(locks.get(resource) or {})
     if action == "claim":
         now = values["now"]
         if connection.get("reconnect_required"):
             raise GarminError("garmin_reconnect_required", "Replace your Garmin personal API key in Account.", 409)
-        wait = max(connection.get("lease_until", 0), connection.get("retry_at", 0)) - now
+        wait = max(lock.get("lease_until", 0), lock.get("retry_at", 0),
+                   connection.get("lease_until", 0), connection.get("retry_at", 0)) - now
         if wait > 0:
             raise GarminError("garmin_rate_limited", "A refresh is running or cooling down. Try again shortly.", 429, int(wait) + 1)
-        transaction.update(connection_ref, {"lease_id": values["lease_id"], "lease_until": now + 60})
+        locks[resource] = {**lock, "lease_id": values["lease_id"], "lease_until": now + 60}
+        transaction.update(connection_ref, {"resource_locks": locks})
         return None
     if action == "finish":
-        if connection.get("lease_id") != values["lease_id"]:
+        if lock.get("lease_id") != values["lease_id"]:
             raise GarminError("garmin_connection_changed", "A newer Garmin refresh has started. Try again.", 409)
-        updates = {"lease_id": None, "lease_until": 0, **values["updates"]}
+        locks[resource] = {"lease_id": None, "lease_until": 0, "retry_at": values.get("retry_at", 0)}
+        updates = {"resource_locks": locks, **values["updates"]}
         transaction.update(connection_ref, updates)
         if values.get("cache") is not None:
             transaction.set(cache_ref, values["cache"])

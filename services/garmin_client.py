@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import urlencode
 
 import jwt
 
@@ -86,3 +87,75 @@ def fetch_steps(token, start, end):
         return data
     except (ValueError, TypeError, KeyError):
         raise GarminError("garmin_invalid_response", "Garmin returned unexpected steps data.") from None
+
+
+def _json_response(path, token):
+    try:
+        return json.loads(_request(path, f"Bearer {token}"))
+    except ValueError:
+        raise GarminError("garmin_invalid_response", "Garmin returned unexpected data.") from None
+
+
+def _measurement(value):
+    if value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
+        raise ValueError("measurement")
+
+
+def fetch_sleep(token, day):
+    data = _json_response("/sleep-service/sleep/dailySleep?" + urlencode({"date": day}), token)
+    try:
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("shape")
+        # Support a wrapped DTO as well as the flat shape in the Personal API spec.
+        sleep = data.get("dailySleepDTO", data)
+        if sleep is None:
+            return data
+        if not isinstance(sleep, dict) or sleep.get("calendarDate", day) != day:
+            raise ValueError("date")
+        for field in ("sleepTimeSeconds", "deepSleepSeconds", "lightSleepSeconds", "remSleepSeconds", "awakeSleepSeconds"):
+            _measurement(sleep.get(field))
+        scores = sleep.get("sleepScores")
+        if scores is not None:
+            if not isinstance(scores, dict):
+                raise ValueError("scores")
+            for score in scores.values():
+                if score is None:
+                    continue
+                if not isinstance(score, dict):
+                    raise ValueError("score")
+                _measurement(score.get("value"))
+        return data
+    except (ValueError, TypeError):
+        raise GarminError("garmin_invalid_response", "Garmin returned unexpected sleep data.") from None
+
+
+def fetch_activities(token, start, end, limit):
+    query = urlencode({"start": 0, "limit": limit, "startDate": start, "endDate": end,
+                       "sortBy": "startLocal", "sortOrder": "desc", "excludeChildren": "true"})
+    data = _json_response("/activitylist-service/activities/search/activities?" + query, token)
+    try:
+        if not isinstance(data, list) or len(data) > limit:
+            raise ValueError("shape")
+        seen = set()
+        for row in data:
+            if not isinstance(row, dict):
+                raise ValueError("activity")
+            activity_id = row.get("activityId")
+            if type(activity_id) is not int or activity_id < 0 or activity_id in seen:
+                raise ValueError("id")
+            seen.add(activity_id)
+            for field in ("activityName", "startTimeLocal"):
+                if row.get(field) is not None and not isinstance(row[field], str):
+                    raise ValueError("text")
+            local = row.get("startTimeLocal")
+            if local and not start <= datetime.fromisoformat(local).date().isoformat() <= end:
+                raise ValueError("date")
+            if row.get("activityType") is not None and not isinstance(row["activityType"], dict):
+                raise ValueError("type")
+            for field in ("distance", "duration"):
+                _measurement(row.get(field))
+        return sorted(data, key=lambda item: (item.get("startTimeLocal") or "").replace("T", " "), reverse=True)
+    except (ValueError, TypeError):
+        raise GarminError("garmin_invalid_response", "Garmin returned unexpected activity data.") from None
