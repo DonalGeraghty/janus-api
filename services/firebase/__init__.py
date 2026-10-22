@@ -4,25 +4,15 @@ from .users import (
     delete_user_account,
     ensure_user_account_id,
     get_ai_selection,
-    get_minerva_settings,
     get_user_record,
     get_user_record_for_account_deletion,
     save_ai_selection,
-    save_minerva_settings,
 )
 from .nutrition import (
     create_nutrition_entry,
     delete_nutrition_entry,
     list_nutrition_entries,
     update_nutrition_entry,
-)
-from .flashcards import (
-    create_flashcard,
-    delete_flashcard,
-    delete_flashcards,
-    list_flashcards,
-    review_flashcard,
-    update_flashcard,
 )
 from .push import (
     claim_push_reminder,

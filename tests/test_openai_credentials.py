@@ -56,9 +56,9 @@ class OpenAICredentialApiTests(unittest.TestCase):
             "updated_at": "2026-07-22T20:00:00+00:00",
         }
         with (
-            patch("app.validate_api_key", return_value=USER_KEY) as validate_mock,
-            patch("app.encrypt_api_key", return_value="kms-ciphertext") as encrypt_mock,
-            patch("app.save_ai_credential", return_value=(True, None, status)) as save_mock,
+            patch("routes.ai_settings.validate_api_key", return_value=USER_KEY) as validate_mock,
+            patch("routes.ai_settings.encrypt_api_key", return_value="kms-ciphertext") as encrypt_mock,
+            patch("routes.ai_settings.save_ai_credential", return_value=(True, None, status)) as save_mock,
         ):
             response = self.client.put(
                 "/api/user/openai-key", headers=headers, json={"api_key": USER_KEY}
@@ -90,9 +90,9 @@ class OpenAICredentialApiTests(unittest.TestCase):
     def test_invalid_replacement_does_not_overwrite_existing_key(self):
         headers = self.register()
         with (
-            patch("app.validate_api_key", side_effect=ValueError("invalid_api_key")),
-            patch("app.encrypt_api_key") as encrypt_mock,
-            patch("app.save_ai_credential") as save_mock,
+            patch("routes.ai_settings.validate_api_key", side_effect=ValueError("invalid_api_key")),
+            patch("routes.ai_settings.encrypt_api_key") as encrypt_mock,
+            patch("routes.ai_settings.save_ai_credential") as save_mock,
         ):
             response = self.client.put(
                 "/api/user/openai-key", headers=headers, json={"api_key": "bad"}
@@ -104,7 +104,7 @@ class OpenAICredentialApiTests(unittest.TestCase):
     def test_status_returns_only_safe_metadata(self):
         headers = self.register()
         with patch(
-            "app.get_ai_credential_status",
+            "routes.ai_settings.get_ai_credential_status",
             return_value=(True, None, {"configured": True, "last_four": "Ab12"}),
         ):
             response = self.client.get("/api/user/openai-key", headers=headers)
@@ -116,7 +116,7 @@ class OpenAICredentialApiTests(unittest.TestCase):
 
     def test_key_can_be_removed(self):
         headers = self.register()
-        with patch("app.delete_ai_credential", return_value=(True, None)) as delete_mock:
+        with patch("routes.ai_settings.delete_ai_credential", return_value=(True, None)) as delete_mock:
             response = self.client.delete("/api/user/openai-key", headers=headers)
         self.assertEqual(response.status_code, 200)
         delete_mock.assert_called_once_with(

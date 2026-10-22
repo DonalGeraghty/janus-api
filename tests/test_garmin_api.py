@@ -67,8 +67,8 @@ class GarminIntegrationTests(unittest.TestCase):
             patch("services.garmin_service.decrypt_api_key", side_effect=lambda value, *args, **kwargs: value.removeprefix("encrypted:")),
             patch("services.garmin_client.obtain_token", return_value=(TOKEN, time.time() + 86400)),
             patch("services.garmin_client.fetch_steps", return_value=STEPS),
-            patch("app.decode_access_token", side_effect=lambda token: {"email": EMAIL, "account_id": ACCOUNT} if token == "valid" else None),
-            patch("app.get_user_record", side_effect=lambda email: self.records.get(f"users/{email}")),
+            patch("core.request_auth.decode_access_token", side_effect=lambda token: {"email": EMAIL, "account_id": ACCOUNT} if token == "valid" else None),
+            patch("core.request_auth.get_user_record", side_effect=lambda email: self.records.get(f"users/{email}")),
         ]
         self.mocks = [item.start() for item in self.patches]
         self.addCleanup(lambda: [item.stop() for item in reversed(self.patches)])

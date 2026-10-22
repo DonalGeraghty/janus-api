@@ -166,7 +166,7 @@ class PushApiTests(unittest.TestCase):
                 401,
             )
             with patch(
-                "app.dispatch_due_reminders",
+                "routes.push.dispatch_due_reminders",
                 return_value={
                     "status": "success",
                     "users": 0,

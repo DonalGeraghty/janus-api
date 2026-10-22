@@ -62,7 +62,6 @@ class AISettingsApiTests(unittest.TestCase):
 
     def test_ai_routes_require_authentication(self):
         self.assertEqual(self.client.get("/api/user/ai-settings").status_code, 401)
-        self.assertEqual(self.client.get("/api/user/minerva-settings").status_code, 401)
         self.assertEqual(
             self.client.put(
                 "/api/user/ai-settings",
@@ -81,36 +80,6 @@ class AISettingsApiTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 401)
 
-    def test_minerva_card_context_defaults_off_and_persists(self):
-        headers = self.register()
-
-        initial = self.client.get("/api/user/minerva-settings", headers=headers)
-        self.assertEqual(initial.status_code, 200)
-        self.assertEqual(
-            initial.get_json()["settings"],
-            {"include_card_context": False},
-        )
-
-        updated = self.client.put(
-            "/api/user/minerva-settings",
-            headers=headers,
-            json={"include_card_context": True},
-        )
-        self.assertEqual(updated.status_code, 200)
-        self.assertEqual(
-            updated.get_json()["settings"],
-            {"include_card_context": True},
-        )
-        self.assertTrue(
-            db_state.auth_users_memory["user@example.com"]["minerva_include_card_context"]
-        )
-
-        invalid = self.client.put(
-            "/api/user/minerva-settings",
-            headers=headers,
-            json={"include_card_context": "yes"},
-        )
-        self.assertEqual(invalid.status_code, 400)
 
     def test_settings_return_catalog_selection_and_safe_statuses(self):
         headers = self.register()
@@ -125,7 +94,7 @@ class AISettingsApiTests(unittest.TestCase):
             return True, None, None
 
         with patch(
-            "app.get_ai_credential_status", side_effect=credential_status
+            "routes.ai_settings.get_ai_credential_status", side_effect=credential_status
         ):
             response = self.client.get("/api/user/ai-settings", headers=headers)
 
@@ -210,10 +179,10 @@ class AISettingsApiTests(unittest.TestCase):
             "verified_at": "2026-07-28T18:00:00+00:00",
         }
         with (
-            patch("app.validate_api_key", return_value=MISTRAL_KEY) as validate_mock,
-            patch("app.encrypt_api_key", return_value="kms-ciphertext") as encrypt_mock,
+            patch("routes.ai_settings.validate_api_key", return_value=MISTRAL_KEY) as validate_mock,
+            patch("routes.ai_settings.encrypt_api_key", return_value="kms-ciphertext") as encrypt_mock,
             patch(
-                "app.save_ai_credential",
+                "routes.ai_settings.save_ai_credential",
                 return_value=(True, None, status),
             ) as save_mock,
         ):
@@ -255,14 +224,14 @@ class AISettingsApiTests(unittest.TestCase):
         }
         with (
             patch(
-                "app.validate_api_key", return_value=ANTHROPIC_KEY
+                "routes.ai_settings.validate_api_key", return_value=ANTHROPIC_KEY
             ) as validate_mock,
             patch(
-                "app.encrypt_api_key",
+                "routes.ai_settings.encrypt_api_key",
                 return_value="anthropic-ciphertext",
             ) as encrypt_mock,
             patch(
-                "app.save_ai_credential",
+                "routes.ai_settings.save_ai_credential",
                 return_value=(True, None, status),
             ) as save_mock,
         ):
@@ -303,18 +272,18 @@ class AISettingsApiTests(unittest.TestCase):
         }
         with (
             patch(
-                "app.validate_api_key",
+                "routes.ai_settings.validate_api_key",
                 return_value=AICredentialValidation(
                     ANTHROPIC_KEY,
                     BILLING_REQUIRED,
                 ),
             ),
             patch(
-                "app.encrypt_api_key",
+                "routes.ai_settings.encrypt_api_key",
                 return_value="anthropic-ciphertext",
             ),
             patch(
-                "app.save_ai_credential",
+                "routes.ai_settings.save_ai_credential",
                 return_value=(True, None, status),
             ) as save_mock,
         ):
@@ -337,7 +306,7 @@ class AISettingsApiTests(unittest.TestCase):
 
     def test_anthropic_validation_error_uses_provider_display_name(self):
         headers = self.register()
-        with patch("app.validate_api_key", side_effect=ValueError("invalid_api_key")):
+        with patch("routes.ai_settings.validate_api_key", side_effect=ValueError("invalid_api_key")):
             response = self.client.put(
                 "/api/user/ai-credentials/anthropic",
                 headers=headers,
@@ -361,11 +330,11 @@ class AISettingsApiTests(unittest.TestCase):
             with self.subTest(error=error_code):
                 with (
                     patch(
-                        "app.validate_api_key",
+                        "routes.ai_settings.validate_api_key",
                         side_effect=validation_error,
                     ),
-                    patch("app.encrypt_api_key") as encrypt_mock,
-                    patch("app.save_ai_credential") as save_mock,
+                    patch("routes.ai_settings.encrypt_api_key") as encrypt_mock,
+                    patch("routes.ai_settings.save_ai_credential") as save_mock,
                 ):
                     response = self.client.put(
                         "/api/user/ai-credentials/anthropic",
@@ -380,7 +349,7 @@ class AISettingsApiTests(unittest.TestCase):
 
     def test_invalid_provider_path_is_rejected_before_provider_call(self):
         headers = self.register()
-        with patch("app.validate_api_key") as validate_mock:
+        with patch("routes.ai_settings.validate_api_key") as validate_mock:
             response = self.client.put(
                 "/api/user/ai-credentials/not-a-provider",
                 headers=headers,
@@ -392,7 +361,7 @@ class AISettingsApiTests(unittest.TestCase):
 
     def test_non_object_settings_and_credential_payloads_are_rejected(self):
         headers = self.register()
-        with patch("app.validate_api_key") as validate_mock:
+        with patch("routes.ai_settings.validate_api_key") as validate_mock:
             credential_response = self.client.put(
                 "/api/user/ai-credentials/mistral",
                 headers=headers,
@@ -420,7 +389,7 @@ class AISettingsApiTests(unittest.TestCase):
         headers = self.register()
         status = {"configured": True, "last_four": "Ab12"}
         with patch(
-            "app.get_ai_credential_status",
+            "routes.ai_settings.get_ai_credential_status",
             return_value=(True, None, status),
         ) as status_mock:
             response = self.client.get(
@@ -437,7 +406,7 @@ class AISettingsApiTests(unittest.TestCase):
         )
 
         with patch(
-            "app.delete_ai_credential", return_value=(True, None)
+            "routes.ai_settings.delete_ai_credential", return_value=(True, None)
         ) as delete_mock:
             response = self.client.delete(
                 "/api/user/ai-credentials/mistral", headers=headers
@@ -458,7 +427,7 @@ class AISettingsApiTests(unittest.TestCase):
             json=MISTRAL_SELECTION,
         )
         with patch(
-            "app.get_ai_credential", return_value=(True, None, None)
+            "services.ai_credentials.get_ai_credential", return_value=(True, None, None)
         ) as credential_mock:
             response = self.client.post(
                 "/api/nutrition/analyze",
@@ -484,7 +453,7 @@ class AISettingsApiTests(unittest.TestCase):
         )
         with (
             patch(
-                "app.get_ai_credential",
+                "services.ai_credentials.get_ai_credential",
                 return_value=(
                     True,
                     None,
@@ -492,9 +461,9 @@ class AISettingsApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "app.decrypt_api_key", return_value=MISTRAL_KEY
+                "routes.nutrition.decrypt_api_key", return_value=MISTRAL_KEY
             ) as decrypt_mock,
-            patch("app.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
+            patch("routes.nutrition.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
         ):
             response = self.client.post(
                 "/api/nutrition/analyze",
@@ -528,7 +497,7 @@ class AISettingsApiTests(unittest.TestCase):
 
         with (
             patch(
-                "app.get_ai_credential",
+                "services.ai_credentials.get_ai_credential",
                 return_value=(
                     True,
                     None,
@@ -536,9 +505,9 @@ class AISettingsApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "app.decrypt_api_key", return_value=ANTHROPIC_KEY
+                "routes.nutrition.decrypt_api_key", return_value=ANTHROPIC_KEY
             ) as decrypt_mock,
-            patch("app.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
+            patch("routes.nutrition.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
         ):
             response = self.client.post(
                 "/api/nutrition/analyze",
@@ -565,14 +534,14 @@ class AISettingsApiTests(unittest.TestCase):
         headers = self.register()
         with (
             patch(
-                "app.get_ai_credential",
+                "services.ai_credentials.get_ai_credential",
                 return_value=(True, None, {"ciphertext": "legacy-ciphertext"}),
             ),
             patch(
-                "app.decrypt_api_key",
+                "routes.nutrition.decrypt_api_key",
                 return_value="user-api-key-1234567890",
             ) as decrypt_mock,
-            patch("app.analyze_meal", return_value=SAMPLE_ANALYSIS),
+            patch("routes.nutrition.analyze_meal", return_value=SAMPLE_ANALYSIS),
         ):
             response = self.client.post(
                 "/api/nutrition/analyze",
@@ -592,15 +561,15 @@ class AISettingsApiTests(unittest.TestCase):
         headers = self.register()
         with (
             patch(
-                "app._selected_ai_credential",
+                "routes.nutrition.selected_ai_credential",
                 return_value=(
                     MISTRAL_SELECTION,
                     {"ciphertext": "encrypted", "aad_version": 2},
                     None,
                 ),
             ),
-            patch("app.decrypt_api_key", return_value=MISTRAL_KEY),
-            patch("app.analyze_meal", side_effect=AIServiceError()),
+            patch("routes.nutrition.decrypt_api_key", return_value=MISTRAL_KEY),
+            patch("routes.nutrition.analyze_meal", side_effect=AIServiceError()),
         ):
             response = self.client.post(
                 "/api/nutrition/analyze",
@@ -618,7 +587,7 @@ class AISettingsApiTests(unittest.TestCase):
             (
                 "/api/nutrition/analyze",
                 {"message": "Two eggs"},
-                "app.analyze_meal",
+                "routes.nutrition.analyze_meal",
             ),
             (
                 "/api/nutrition/recommend",
@@ -630,21 +599,21 @@ class AISettingsApiTests(unittest.TestCase):
                     "meals_remaining": 1,
                     "preferences": "",
                 },
-                "app.recommend_meals",
+                "routes.nutrition.recommend_meals",
             ),
         ]
         for endpoint, payload, operation in cases:
             with self.subTest(endpoint=endpoint):
                 with (
                     patch(
-                        "app._selected_ai_credential",
+                        "routes.nutrition.selected_ai_credential",
                         return_value=(
                             MISTRAL_SELECTION,
                             {"ciphertext": "encrypted", "aad_version": 2},
                             None,
                         ),
                     ),
-                    patch("app.decrypt_api_key", return_value=MISTRAL_KEY),
+                    patch("routes.nutrition.decrypt_api_key", return_value=MISTRAL_KEY),
                     patch(operation, side_effect=AIBillingError()),
                 ):
                     response = self.client.post(
@@ -664,15 +633,15 @@ class AISettingsApiTests(unittest.TestCase):
         headers = self.register()
         with (
             patch(
-                "app._selected_ai_credential",
+                "routes.nutrition.selected_ai_credential",
                 return_value=(
                     MISTRAL_SELECTION,
                     {"ciphertext": "encrypted", "aad_version": 2},
                     None,
                 ),
             ),
-            patch("app.decrypt_api_key", return_value=MISTRAL_KEY),
-            patch("app.analyze_meal", side_effect=AIAuthorizationError()),
+            patch("routes.nutrition.decrypt_api_key", return_value=MISTRAL_KEY),
+            patch("routes.nutrition.analyze_meal", side_effect=AIAuthorizationError()),
         ):
             response = self.client.post(
                 "/api/nutrition/analyze",
@@ -687,14 +656,14 @@ class AISettingsApiTests(unittest.TestCase):
         headers = self.register()
         with (
             patch(
-                "app._selected_ai_credential",
+                "routes.nutrition.selected_ai_credential",
                 return_value=(
                     MISTRAL_SELECTION,
                     {"ciphertext": "encrypted", "aad_version": 2},
                     None,
                 ),
             ),
-            patch("app.decrypt_api_key", return_value=MISTRAL_KEY),
+            patch("routes.nutrition.decrypt_api_key", return_value=MISTRAL_KEY),
             patch("services.mistral_service.Mistral") as mistral_mock,
         ):
             client = mistral_mock.return_value.__enter__.return_value

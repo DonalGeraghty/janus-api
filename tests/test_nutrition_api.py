@@ -99,15 +99,15 @@ class NutritionApiTests(unittest.TestCase):
         headers = self.register()
         with (
             patch(
-                "app._selected_ai_credential",
+                "routes.nutrition.selected_ai_credential",
                 return_value=(
                     OPENAI_SELECTION,
                     {"ciphertext": "encrypted", "aad_version": 2},
                     None,
                 ),
             ),
-            patch("app.decrypt_api_key", return_value="user-api-key-1234567890"),
-            patch("app.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
+            patch("routes.nutrition.decrypt_api_key", return_value="user-api-key-1234567890"),
+            patch("routes.nutrition.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
         ):
             response = self.client.post(
                 "/api/nutrition/analyze",
@@ -128,7 +128,7 @@ class NutritionApiTests(unittest.TestCase):
     def test_analyze_requires_user_openai_key(self):
         headers = self.register()
         with patch(
-            "app._selected_ai_credential",
+            "routes.nutrition.selected_ai_credential",
             return_value=(OPENAI_SELECTION, None, None),
         ):
             response = self.client.post(
@@ -142,15 +142,15 @@ class NutritionApiTests(unittest.TestCase):
         headers = self.register()
         with (
             patch(
-                "app._selected_ai_credential",
+                "routes.nutrition.selected_ai_credential",
                 return_value=(
                     OPENAI_SELECTION,
                     {"ciphertext": "encrypted", "aad_version": 2},
                     None,
                 ),
             ),
-            patch("app.decrypt_api_key", return_value="user-api-key-1234567890"),
-            patch("app.analyze_meal", side_effect=OpenAIRateLimitError()),
+            patch("routes.nutrition.decrypt_api_key", return_value="user-api-key-1234567890"),
+            patch("routes.nutrition.analyze_meal", side_effect=OpenAIRateLimitError()),
         ):
             response = self.client.post(
                 "/api/nutrition/analyze", headers=headers, json={"message": "Two eggs"}
@@ -161,7 +161,7 @@ class NutritionApiTests(unittest.TestCase):
         headers = self.register()
         with (
             patch(
-                "app._selected_ai_credential",
+                "routes.nutrition.selected_ai_credential",
                 return_value=(
                     OPENAI_SELECTION,
                     {"ciphertext": "encrypted", "aad_version": 2},
@@ -169,7 +169,7 @@ class NutritionApiTests(unittest.TestCase):
                 ),
             ),
             patch(
-                "app.decrypt_api_key",
+                "routes.nutrition.decrypt_api_key",
                 return_value="user-api-key-1234567890",
             ),
             patch("services.openai_service.OpenAI") as openai_mock,
@@ -191,15 +191,15 @@ class NutritionApiTests(unittest.TestCase):
         headers = self.register()
         with (
             patch(
-                "app._selected_ai_credential",
+                "routes.nutrition.selected_ai_credential",
                 return_value=(
                     OPENAI_SELECTION,
                     {"ciphertext": "encrypted", "aad_version": 2},
                     None,
                 ),
             ),
-            patch("app.decrypt_api_key", return_value="user-api-key-1234567890"),
-            patch("app.recommend_meals", return_value={
+            patch("routes.nutrition.decrypt_api_key", return_value="user-api-key-1234567890"),
+            patch("routes.nutrition.recommend_meals", return_value={
                 **SAMPLE_RECOMMENDATION,
                 "calorie_budget_remaining": 800,
                 "protein_remaining_g": 60.0,
@@ -259,7 +259,7 @@ class NutritionApiTests(unittest.TestCase):
         )
 
         with patch(
-            "app._selected_ai_credential",
+            "routes.nutrition.selected_ai_credential",
             return_value=(OPENAI_SELECTION, None, None),
         ):
             response = self.client.post(
