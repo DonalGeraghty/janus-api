@@ -358,6 +358,23 @@ class GarminIntegrationTests(unittest.TestCase):
 
 
 class GarminClientTests(unittest.TestCase):
+    def test_sleep_validation_identifies_field_without_exposing_response_values(self):
+        for payload, field in (
+            ([], "response object"),
+            ({"dailySleepDTO": []}, "dailySleepDTO object"),
+            ({"calendarDate": "private-value"}, "calendarDate"),
+            ({"deepSleepSeconds": "private-value"}, "deepSleepSeconds"),
+            ({"sleepScores": []}, "sleepScores object"),
+            ({"sleepScores": {"private-key": "private-value"}}, "sleepScores entry"),
+            ({"sleepScores": {"private-key": {"value": "private-value"}}}, "sleepScores entry value"),
+        ):
+            with self.subTest(field=field), patch.object(garmin_client, "_request", return_value=json.dumps(payload)):
+                with self.assertRaises(GarminError) as raised:
+                    garmin_client.fetch_sleep(TOKEN, DAY)
+                self.assertIn(field, raised.exception.message)
+                self.assertNotIn("private-value", raised.exception.message)
+                self.assertNotIn("private-key", raised.exception.message)
+
     def test_sleep_and_activity_paths_fields_and_recorded_local_dates(self):
         with patch.object(garmin_client, "_request", return_value=json.dumps(SLEEP)) as upstream:
             self.assertEqual(garmin_client.fetch_sleep(TOKEN, DAY), SLEEP)
