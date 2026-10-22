@@ -10,6 +10,8 @@ from . import garmin_client
 from .credential_service import encrypt_api_key, decrypt_api_key, CredentialConfigurationError, CredentialEncryptionError
 from .firebase.garmin import execute
 from .garmin_errors import GarminError
+from .garmin_catalog import HEALTH_RESOURCES
+from . import garmin_resources
 
 logger = logging.getLogger("janus-api.garmin")
 
@@ -17,7 +19,7 @@ logger = logging.getLogger("janus-api.garmin")
 def _log_failure(resource, error, cached, stage):
     # Error messages are Janus-authored; upstream response bodies never enter them.
     logger.warning("Garmin resource failure resource=%s stage=%s code=%s cached_fallback=%s retry_after=%s reason=%s",
-                   resource, stage, error.code, cached, error.retry_after, error.message)
+                   resource.split(":", 1)[0], stage, error.code, cached, error.retry_after, error.message)
 
 
 def _crypt(function, value, email, account_id, generation, purpose):
@@ -101,6 +103,25 @@ def get_activities(email, account_id, start, end, limit=5, force=False):
         raise GarminError("invalid_limit", "Activity limit must be an integer from 1 to 20.", 400)
     return _get_resource(email, account_id, "activities", start, end,
                          lambda token: garmin_client.fetch_activities(token, start, end, limit), force, f":{limit}")
+
+
+def get_health(email, account_id, resource, start, end, force=False):
+    if resource not in HEALTH_RESOURCES:
+        raise GarminError("invalid_resource", "Unknown Garmin resource.", 400)
+    validate_range(start, end)
+    if resource in ("heart-rate", "fitness-age", "body-battery") and start != end:
+        raise GarminError("invalid_date_range", "Select one date for this resource.", 400)
+    return _get_resource(email, account_id, resource, start, end,
+                         lambda token: garmin_resources.fetch_health(resource, token, start, end), force)
+
+
+def get_activity(email, account_id, activity_id, workouts=False, force=False):
+    if type(activity_id) is not int or not 0 < activity_id <= 9223372036854775807:
+        raise GarminError("invalid_activity", "Select a valid activity.", 400)
+    today = datetime.now(timezone.utc).date().isoformat()
+    resource = f"activity-{'workouts' if workouts else 'summary'}:{activity_id}"
+    return _get_resource(email, account_id, resource, today, today,
+                         lambda token: garmin_resources.fetch_activity(token, activity_id, workouts), force)
 
 
 def _get_resource(email, account_id, resource, start, end, fetch, force=False, variant=""):
