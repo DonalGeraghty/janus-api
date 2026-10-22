@@ -1,7 +1,7 @@
 """Bounded, documented Garmin dashboard reads and conservative shape validation."""
 
 from urllib.parse import urlencode
-from datetime import date, timedelta
+from datetime import date
 
 from .garmin_client import _json_response, _measurement
 from .garmin_errors import GarminError
@@ -37,46 +37,7 @@ def fetch_health(resource, token, start, end):
     """Retain all fields; validate the envelope and displayed numeric measurements."""
     query = urlencode({"startDate": start, "endDate": end})
     try:
-        if resource == "body-battery":
-            data = _json_response("/wellness-service/wellness/bodyBattery/reports/daily?" + query + "&chunks=48", token)
-            data = _rows(data, start, end, "date")
-            for row in data:
-                for key in ("charged", "drained"):
-                    _measurement(row.get(key))
-            data = {"reports": data, "summary": None}
-            try:
-                summary = _json_response("/usersummary-service/usersummary/daily?" + urlencode({"calendarDate": end}), token)
-                if summary is not None and _object(summary).get("calendarDate", end) == end:
-                    data["summary"] = summary
-            except GarminError as error:
-                if error.code in ("garmin_rate_limited", "garmin_reconnect_required"):
-                    raise
-                data["summary_warning"] = "Daily summary unavailable; showing Body Battery report data."
-            except (ValueError, TypeError):
-                data["summary_warning"] = "Daily summary unavailable; showing Body Battery report data."
-        elif resource == "heart-rate":
-            data = _json_response("/wellness-service/wellness/dailyHeartRate?" + urlencode({"date": end}), token)
-            if data is not None:
-                _object(data)
-                recorded = data.get("calendarDate")
-                if isinstance(recorded, dict):
-                    recorded = recorded.get("localDate")
-                if recorded and recorded != end:
-                    return None
-                for key in ("minHeartRate", "maxHeartRate", "restingHeartRate", "lastSevenDaysAvgRestingHeartRate"):
-                    _measurement(data.get(key))
-            data = {"daily": data, "history": []}
-            try:
-                first = (date.fromisoformat(end) - timedelta(days=6)).isoformat()
-                history = _json_response("/usersummary-service/v2/dailysummaries?" + urlencode({"startDate": first, "endDate": end}), token)
-                data["history"] = _rows(_object(history).get("data") if history is not None else None, first, end)
-            except GarminError as error:
-                if error.code in ("garmin_rate_limited", "garmin_reconnect_required"):
-                    raise
-                data["history_warning"] = "Resting heart rate history unavailable; showing daily readings."
-            except (ValueError, TypeError):
-                data["history_warning"] = "Resting heart rate history unavailable; showing daily readings."
-        elif resource in ("stress", "movement"):
+        if resource in ("stress", "movement"):
             raw = _json_response("/usersummary-service/v2/dailysummaries?" + query, token)
             data = _rows(_object(raw).get("data") if raw is not None else None, start, end)
         elif resource == "hrv":
@@ -100,16 +61,6 @@ def fetch_health(resource, token, start, end):
                     _object(latest)
                     for key in ("weight", "bmi", "bodyFat", "bodyWater", "muscleMass", "boneMass"):
                         _measurement(latest.get(key))
-        elif resource == "fitness-age":
-            data = _json_response(f"/fitnessage-service/fitnessage/v2/{end}?fullHistoryScan=true", token)
-            if data is None:
-                data = []
-            if not isinstance(data, list) or len(data) > 28:
-                raise ValueError("fitness records array")
-            for row in data:
-                _object(row)
-                for key in ("chronologicalAge", "fitnessAge", "achievableFitnessAge", "previousFitnessAge"):
-                    _measurement(row.get(key))
         else:
             raise GarminError("invalid_resource", "Unknown Garmin resource.", 400)
         return data

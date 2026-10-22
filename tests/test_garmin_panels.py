@@ -78,6 +78,24 @@ class GarminPanelIntegrationTests(unittest.TestCase):
             self.assertEqual(result.status_code, 400)
         self.assertEqual(self.client.put('/api/garmin/preferences', headers=self.headers, json={"visible_panels": []}).status_code, 200)
 
+    def test_retired_resources_reject_reads_refreshes_and_preferences(self):
+        self.connect()
+        for resource in ('body-battery', 'heart-rate', 'fitness-age'):
+            with self.subTest(resource=resource), patch.object(garmin_resources, 'fetch_health') as fetch:
+                self.assertNotIn(resource, PANEL_IDS)
+                self.assertEqual(self.client.get(f'/api/garmin/data/{resource}?start={DAY}&end={DAY}', headers=self.headers).status_code, 404)
+                self.assertEqual(self.client.post('/api/garmin/refresh', headers=self.headers, json={'resources': [resource], 'start': DAY, 'end': DAY}).status_code, 400)
+                self.assertEqual(self.client.put('/api/garmin/preferences', headers=self.headers, json={'visible_panels': [resource]}).status_code, 400)
+                fetch.assert_not_called()
+
+    def test_saved_preferences_drop_retired_panels_and_preserve_remaining_choices(self):
+        path = f'users/{EMAIL}/garmin_settings/dashboard'
+        for original, expected in [(['sleep', 'heart-rate', 'hrv', 'body-battery', 'fitness-age'], ['sleep', 'hrv']), ([], []), (['body-battery'], [])]:
+            self.records[path] = {'account_id': ACCOUNT, 'visible_panels': original}
+            result = self.client.get('/api/garmin/preferences', headers=self.headers)
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(result.json['preferences']['visible_panels'], expected)
+
     def test_activity_cache_is_separate_for_each_id_and_workouts(self):
         self.connect()
         with patch.object(garmin_resources, 'fetch_activity', side_effect=lambda token, activity_id, workouts: [] if workouts else {"activityId": activity_id}) as fetch:
@@ -94,7 +112,6 @@ class GarminPanelIntegrationTests(unittest.TestCase):
         for path in (f'/data/hrv?start={DAY}&end={DAY}&url=https://example.com',
                      f'/data/hrv?start={DAY}&start={DAY}&end={DAY}', '/data/hrv?start=bad&end=bad',
                      '/data/hrv?start=2026-01-01&end=2026-03-01',
-                     '/data/heart-rate?start=2026-01-01&end=2026-01-02',
                      '/activities/0', '/activities/9223372036854775808', '/activities/123?url=https://example.com'):
             self.assertEqual(self.client.get('/api/garmin' + path, headers=self.headers).status_code, 400, path)
         self.assertEqual(self.client.get(f'/api/garmin/data/unknown?start={DAY}&end={DAY}', headers=self.headers).status_code, 404)
@@ -104,17 +121,14 @@ class GarminPanelIntegrationTests(unittest.TestCase):
 class GarminPanelClientTests(unittest.TestCase):
     def test_documented_paths_and_shapes(self):
         fixtures = {
-            'body-battery': ([{"date": DAY, "charged": 40, "drained": 20}], 'bodyBattery/reports/daily'),
-            'heart-rate': ({"calendarDate": {"localDate": DAY}, "restingHeartRate": 52}, 'dailyHeartRate'),
             'stress': ({"data": [{"calendarDate": DAY, "stress": {"avgLevel": 25}}]}, 'v2/dailysummaries'),
             'movement': ({"data": [{"calendarDate": DAY, "movement": {"steps": {"value": 100}}}]}, 'v2/dailysummaries'),
             'hrv': ({"hrvSummaries": [{"calendarDate": DAY, "lastNightAvg": 60}]}, 'hrv/daily/'),
             'hydration': ([{"calendarDate": DAY, "valueInML": 1500}], 'stats/hydration/daily/'),
             'weight': ({"dailyWeightSummaries": [{"summaryDate": DAY, "latestWeight": {"weight": 70}}]}, 'weight/range/'),
-            'fitness-age': ([{"fitnessAge": 30}], 'fitnessage/v2/'),
         }
         for resource, (data, path) in fixtures.items():
-            with self.subTest(resource=resource), patch.object(garmin_resources, '_json_response', side_effect=[data, None] if resource in ('body-battery', 'heart-rate') else [data]) as upstream:
+            with self.subTest(resource=resource), patch.object(garmin_resources, '_json_response', return_value=data) as upstream:
                 result = garmin_resources.fetch_health(resource, TOKEN, DAY, DAY)
                 self.assertIn(path, upstream.call_args_list[0].args[0])
                 self.assertIsNotNone(result)
@@ -130,20 +144,13 @@ class GarminPanelClientTests(unittest.TestCase):
         with patch.object(garmin_client, '_request', return_value=''):
             self.assertIsNone(garmin_client._json_response('/hrv-service/hrv/day', TOKEN))
 
-    def test_partial_daily_data_survives_history_or_summary_failure(self):
-        for resource, daily, field in [('heart-rate', {"restingHeartRate": 51}, 'daily'), ('body-battery', [{"date": DAY, "charged": 30}], 'reports')]:
-            with patch.object(garmin_resources, '_json_response', side_effect=[daily, GarminError('garmin_unavailable', 'Safe message')]):
-                result = garmin_resources.fetch_health(resource, TOKEN, DAY, DAY)
-                self.assertEqual(result[field], daily)
-                self.assertIn('history_warning' if resource == 'heart-rate' else 'summary_warning', result)
-
-    def test_secondary_rate_limit_and_auth_failures_reach_shared_connection_controls(self):
-        for resource, daily in [('heart-rate', {"restingHeartRate": 51}), ('body-battery', [{"date": DAY, "charged": 30}])]:
-            for error in (GarminError('garmin_rate_limited', 'Wait', 429, 90), GarminError('garmin_reconnect_required', 'Replace key', 409)):
-                with patch.object(garmin_resources, '_json_response', side_effect=[daily, error]):
-                    with self.assertRaises(GarminError) as raised:
-                        garmin_resources.fetch_health(resource, TOKEN, DAY, DAY)
-                    self.assertIs(raised.exception, error)
+    def test_retired_resources_never_call_garmin(self):
+        for resource in ('body-battery', 'heart-rate', 'fitness-age'):
+            with self.subTest(resource=resource), patch.object(garmin_resources, '_json_response') as upstream:
+                with self.assertRaises(GarminError) as raised:
+                    garmin_resources.fetch_health(resource, TOKEN, DAY, DAY)
+                self.assertEqual(raised.exception.code, 'invalid_resource')
+                upstream.assert_not_called()
 
     def test_upstream_log_labels_remove_activity_ids_dates_and_query_parameters(self):
         self.assertEqual(garmin_client._endpoint_label('/activity-service/activity/123456789012/workouts?token=secret'), '/activity-service/activity/{id}/workouts')
