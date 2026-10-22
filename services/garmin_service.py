@@ -1,6 +1,7 @@
 """Garmin connection lifecycle and independent cached dashboard resources."""
 
 import hashlib
+import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
@@ -9,6 +10,14 @@ from . import garmin_client
 from .credential_service import encrypt_api_key, decrypt_api_key, CredentialConfigurationError, CredentialEncryptionError
 from .firebase.garmin import execute
 from .garmin_errors import GarminError
+
+logger = logging.getLogger("janus-api.garmin")
+
+
+def _log_failure(resource, error, cached, stage):
+    # Error messages are Janus-authored; upstream response bodies never enter them.
+    logger.warning("Garmin resource failure resource=%s stage=%s code=%s cached_fallback=%s retry_after=%s reason=%s",
+                   resource, stage, error.code, cached, error.retry_after, error.message)
 
 
 def _crypt(function, value, email, account_id, generation, purpose):
@@ -80,6 +89,12 @@ def get_sleep(email, account_id, day, force=False):
                          lambda token: garmin_client.fetch_sleep(token, day), force)
 
 
+def get_sleep_history(email, account_id, start, end, force=False):
+    validate_range(start, end)
+    return _get_resource(email, account_id, "sleep", start, end,
+                         lambda token: garmin_client.fetch_sleep_history(token, start, end), force, ":history")
+
+
 def get_activities(email, account_id, start, end, limit=5, force=False):
     validate_range(start, end)
     if type(limit) is not int or not 1 <= limit <= 20:
@@ -104,6 +119,7 @@ def _get_resource(email, account_id, resource, start, end, fetch, force=False, v
     try:
         execute(email, account_id, "claim", generation=generation, resource=resource, now=now, lease_id=lease_id)
     except GarminError as error:
+        _log_failure(resource, error, bool(cache) and error.code in ("garmin_rate_limited", "garmin_reconnect_required"), "refresh_claim")
         if cache and error.code in ("garmin_rate_limited", "garmin_reconnect_required"):
             return _envelope(cache, "cache", now, error)
         raise
@@ -119,6 +135,7 @@ def _get_resource(email, account_id, resource, start, end, fetch, force=False, v
     except GarminError as error:
         finished = time.time()
         error.retry_after = max(10, error.retry_after)
+        _log_failure(resource, error, bool(cache), "fetch")
         if error.code == "garmin_rate_limited":
             updates["retry_at"] = finished + max(10, error.retry_after)
         if error.code == "garmin_reconnect_required":

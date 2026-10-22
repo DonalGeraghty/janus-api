@@ -2,6 +2,7 @@
 
 import json
 import math
+import logging
 import time
 from http.client import HTTPException
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from .garmin_errors import GarminError
 BASE_URL = "https://personal.connectapi.garmin.com"
 TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token"
 MAX_RESPONSE_BYTES = 256 * 1024
+logger = logging.getLogger("janus-api.garmin.client")
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -36,6 +38,7 @@ def _retry_delay(value):
 
 
 def _request(path, authorization, method="GET"):
+    started = time.monotonic()
     request = Request(BASE_URL + path, headers={"Authorization": authorization, "Accept": "*/*"}, method=method)
     try:
         with build_opener(_NoRedirect()).open(request, timeout=12) as response:
@@ -44,12 +47,16 @@ def _request(path, authorization, method="GET"):
             raise GarminError("garmin_invalid_response", "Garmin returned too much data.")
         return body.decode("utf-8")
     except HTTPError as error:
+        logger.warning("Garmin upstream failure endpoint=%s status=%s duration_ms=%.0f",
+                       path.split("?", 1)[0], error.code, (time.monotonic() - started) * 1000)
         if error.code in (401, 403):
             raise GarminError("garmin_reconnect_required", "Garmin rejected this connection. Replace your personal API key.", 409) from None
         if error.code == 429:
             raise GarminError("garmin_rate_limited", "Garmin is rate limiting requests. Try again later.", 429, _retry_delay(error.headers.get("Retry-After"))) from None
         raise GarminError("garmin_unavailable", "Garmin is temporarily unavailable.") from None
     except (URLError, OSError, UnicodeError, ValueError, HTTPException):
+        logger.warning("Garmin upstream transport failure endpoint=%s duration_ms=%.0f",
+                       path.split("?", 1)[0], (time.monotonic() - started) * 1000)
         raise GarminError("garmin_unavailable", "Could not reach Garmin. Try again later.") from None
 
 
@@ -103,6 +110,35 @@ def _measurement(value):
 
 def fetch_sleep(token, day):
     data = _json_response("/sleep-service/sleep/dailySleep?" + urlencode({"date": day}), token)
+    return _validate_sleep(data, day)
+
+
+def fetch_sleep_history(token, start, end):
+    query = urlencode({"startDate": start, "endDate": end})
+    data = _json_response("/sleep-service/sleep/dailySleepSummariesByDate?" + query, token)
+    if data is None:
+        return []
+    if not isinstance(data, list) or len(data) > 28:
+        raise GarminError("garmin_invalid_response", "Garmin returned unexpected sleep history: response array.")
+    records, seen = [], set()
+    for row in data:
+        if not isinstance(row, dict):
+            raise GarminError("garmin_invalid_response", "Garmin returned unexpected sleep history: record object.")
+        day = row.get("calendarDate")
+        if day is None or day == "":
+            # Validate an empty record using the same rules as single-day sleep.
+            _validate_sleep(row, start)
+            continue
+        if not isinstance(day, str) or not start <= day <= end or day in seen:
+            raise GarminError("garmin_invalid_response", "Garmin returned unexpected sleep history: calendarDate range or duplicate.")
+        validated = _validate_sleep(row, day)
+        if validated is not None:
+            seen.add(day)
+            records.append(validated)
+    return sorted(records, key=lambda row: row["calendarDate"])
+
+
+def _validate_sleep(data, day):
     # Diagnostics contain only fixed field names, never response values or keys.
     invalid_field = "response object"
     try:
@@ -113,13 +149,25 @@ def fetch_sleep(token, day):
         # Support a wrapped DTO as well as the flat shape in the Personal API spec.
         sleep = data.get("dailySleepDTO", data)
         if sleep is None:
-            return data
+            return None
         invalid_field = "dailySleepDTO object"
         if not isinstance(sleep, dict):
             raise ValueError("shape")
-        invalid_field = "calendarDate (must match the requested date)"
-        if sleep.get("calendarDate", day) != day:
+        if not sleep:
+            return None
+        invalid_field = "calendarDate (must be a YYYY-MM-DD date)"
+        recorded_day = sleep.get("calendarDate", day)
+        # An empty record, or a valid record for another day, does not supply
+        # sleep for the requested date. Never display it under the wrong date.
+        if recorded_day is None or recorded_day == "":
+            logger.info("Garmin sleep unavailable reason=empty_calendar_date")
+            return None
+        if (not isinstance(recorded_day, str)
+                or datetime.strptime(recorded_day, "%Y-%m-%d").date().isoformat() != recorded_day):
             raise ValueError("date")
+        if recorded_day != day:
+            logger.info("Garmin sleep unavailable reason=different_calendar_date")
+            return None
         for field in ("sleepTimeSeconds", "deepSleepSeconds", "lightSleepSeconds", "remSleepSeconds", "awakeSleepSeconds"):
             invalid_field = field + " (must be a number or null)"
             _measurement(sleep.get(field))
