@@ -1,5 +1,4 @@
-"""Janus API: shared authentication, app data, encrypted credentials, and Garmin access."""
-"""Shared authentication, habit/nutrition/flashcard APIs, and encrypted AI credentials."""
+"""Shared authentication, habit/nutrition/flashcard APIs, encrypted credentials, and Garmin access."""
 
 import os
 import hmac
