@@ -22,6 +22,11 @@ DAY = date.today().isoformat()
 KEY = "synthetic-personal-key-1234"
 TOKEN = jwt.encode({"exp": int(time.time()) + 86400}, "synthetic-test-signing-key-only")
 STEPS = [{"calendarDate": DAY, "totalSteps": 4321, "stepGoal": 8000, "totalDistance": 3000}]
+SLEEP = {"calendarDate": DAY, "sleepTimeSeconds": 27000, "deepSleepSeconds": 5400,
+         "lightSleepSeconds": 16200, "remSleepSeconds": 5400, "awakeSleepSeconds": 600,
+         "sleepScores": {"overall": {"value": 82}}}
+ACTIVITIES = [{"activityId": 123, "activityName": "Morning run", "startTimeLocal": DAY + " 07:30:00",
+               "activityType": {"typeKey": "running"}, "distance": 5100, "duration": 1800}]
 
 
 class Reference:
@@ -69,6 +74,8 @@ class GarminIntegrationTests(unittest.TestCase):
             patch("services.garmin_client.fetch_steps", return_value=STEPS),
             patch("core.request_auth.decode_access_token", side_effect=lambda token: {"email": EMAIL, "account_id": ACCOUNT} if token == "valid" else None),
             patch("core.request_auth.get_user_record", side_effect=lambda email: self.records.get(f"users/{email}")),
+            patch("services.garmin_client.fetch_sleep", return_value=SLEEP),
+            patch("services.garmin_client.fetch_activities", return_value=ACTIVITIES),
         ]
         self.mocks = [item.start() for item in self.patches]
         self.addCleanup(lambda: [item.stop() for item in reversed(self.patches)])
@@ -83,12 +90,24 @@ class GarminIntegrationTests(unittest.TestCase):
             return self.client.post("/api/garmin/refresh", headers=self.headers, json={"resources": ["steps"], "start": DAY, "end": DAY})
         return self.client.get(f"/api/garmin/data/steps?start={DAY}&end={DAY}", headers=self.headers)
 
+    def sleep(self, refresh=False):
+        if refresh:
+            return self.client.post("/api/garmin/refresh", headers=self.headers, json={"resources": ["sleep"], "start": DAY, "end": DAY})
+        return self.client.get(f"/api/garmin/data/sleep?date={DAY}", headers=self.headers)
+
+    def activities(self, limit=5):
+        return self.client.get(f"/api/garmin/data/activities?start={DAY}&end={DAY}&limit={limit}", headers=self.headers)
+
+    def allow_refresh(self, resource="steps"):
+        self.connection["retry_at"] = 0
+        self.connection["resource_locks"][resource]["retry_at"] = 0
+
     @property
     def connection(self):
         return self.records[f"users/{EMAIL}/private/garmin"]
 
     def test_routes_require_janus_login_and_disable_browser_caching(self):
-        for method, path in (("get", "/connection"), ("put", "/connection"), ("delete", "/connection"), ("get", "/data/steps"), ("post", "/refresh")):
+        for method, path in (("get", "/connection"), ("put", "/connection"), ("delete", "/connection"), ("get", "/data/steps"), ("get", "/data/sleep"), ("get", "/data/activities"), ("post", "/refresh")):
             result = getattr(self.client, method)("/api/garmin" + path)
             self.assertEqual(result.status_code, 401)
             self.assertEqual(result.headers["Cache-Control"], "no-store")
@@ -130,7 +149,7 @@ class GarminIntegrationTests(unittest.TestCase):
     def test_manual_refresh_bypasses_fresh_cache_and_failed_refresh_keeps_timestamp(self):
         self.connect()
         original = self.steps().json
-        self.connection["retry_at"] = 0
+        self.allow_refresh()
         self.mocks[6].side_effect = GarminError("garmin_unavailable", "Unavailable")
         failed = self.steps(refresh=True)
         self.assertEqual(failed.status_code, 200)
@@ -138,7 +157,7 @@ class GarminIntegrationTests(unittest.TestCase):
         self.assertTrue(failed.json["meta"]["stale"])
         self.assertEqual(failed.json["meta"]["fetched_at"], original["meta"]["fetched_at"])
         self.assertEqual(failed.json["meta"]["warning"]["code"], "garmin_unavailable")
-        self.connection["retry_at"] = 0
+        self.allow_refresh()
         self.mocks[6].side_effect = None
         self.assertEqual(self.steps(refresh=True).json["meta"]["source"], "garmin")
 
@@ -147,7 +166,7 @@ class GarminIntegrationTests(unittest.TestCase):
         self.steps()
         cached = next(value for key, value in self.records.items() if "/garmin_cache/" in key)
         cached["fresh_until"] = 0
-        self.connection["retry_at"] = 0
+        self.allow_refresh()
         self.mocks[6].return_value = []
         result = self.steps()
         self.assertEqual(result.json["data"], [])
@@ -252,8 +271,113 @@ class GarminIntegrationTests(unittest.TestCase):
         with self.assertRaises(GarminError):
             garmin_service.validate_range("2026-01-02", "2026-01-01")
 
+    def test_all_three_resources_load_and_cache_independently(self):
+        self.connect()
+        for request, expected in ((self.steps, STEPS), (self.sleep, SLEEP), (self.activities, ACTIVITIES)):
+            first, cached = request(), request()
+            self.assertEqual(first.status_code, 200, first.json)
+            self.assertEqual(first.json["data"], expected)
+            self.assertEqual(cached.json["meta"]["source"], "cache")
+        self.mocks[6].assert_called_once()
+        self.mocks[9].assert_called_once()
+        self.mocks[10].assert_called_once_with(TOKEN, DAY, DAY, 5)
+        self.assertEqual({item["resource"] for key, item in self.records.items() if "/garmin_cache/" in key}, {"steps", "sleep", "activities"})
+
+    def test_sleep_failure_and_cooldown_do_not_block_other_resources(self):
+        self.connect()
+        self.mocks[9].side_effect = GarminError("garmin_unavailable", "Sleep unavailable")
+        self.assertEqual(self.sleep().status_code, 502)
+        self.assertEqual(self.steps().status_code, 200)
+        self.assertEqual(self.activities().status_code, 200)
+        self.assertEqual(self.sleep().status_code, 429)
+        self.mocks[9].assert_called_once()
+
+    def test_failed_sleep_refresh_preserves_its_own_data_and_timestamp(self):
+        self.connect()
+        original = self.sleep().json
+        self.allow_refresh("sleep")
+        self.mocks[9].side_effect = GarminError("garmin_unavailable", "Sleep unavailable")
+        saved = self.sleep(refresh=True)
+        self.assertEqual(saved.json["data"], SLEEP)
+        self.assertTrue(saved.json["meta"]["stale"])
+        self.assertEqual(saved.json["meta"]["fetched_at"], original["meta"]["fetched_at"])
+        self.assertEqual(self.activities().status_code, 200)
+
+    def test_upstream_rate_limit_backoff_is_shared_but_fresh_cache_still_works(self):
+        self.connect()
+        self.steps()
+        self.mocks[9].side_effect = GarminError("garmin_rate_limited", "Wait", 429, 120)
+        self.assertEqual(self.sleep().status_code, 429)
+        self.assertEqual(self.activities().status_code, 429)
+        self.assertEqual(self.steps().json["meta"]["source"], "cache")
+        self.mocks[10].assert_not_called()
+
+    def test_resource_claims_can_overlap_and_preserve_each_others_locks(self):
+        self.connect()
+        generation = self.connection["generation"]
+        for resource in ("steps", "sleep", "activities"):
+            storage.execute(EMAIL, ACCOUNT, "claim", generation=generation, resource=resource, now=100, lease_id=resource)
+        self.assertEqual(set(self.connection["resource_locks"]), {"steps", "sleep", "activities"})
+        with self.assertRaises(GarminError):
+            storage.execute(EMAIL, ACCOUNT, "claim", generation=generation, resource="sleep", now=101, lease_id="overlap")
+
+    def test_successful_sibling_request_does_not_clear_authentication_failure(self):
+        self.connect()
+        def revoke_during_fetch(*args):
+            self.connection["reconnect_required"] = True
+            return ACTIVITIES
+        self.mocks[10].side_effect = revoke_during_fetch
+        self.assertEqual(self.activities().status_code, 200)
+        self.assertTrue(self.connection["reconnect_required"])
+
+    def test_null_sleep_and_empty_activities_are_cached_as_successes(self):
+        self.connect()
+        self.mocks[9].return_value = None
+        self.mocks[10].return_value = []
+        self.assertIsNone(self.sleep().json["data"])
+        self.assertEqual(self.sleep().json["meta"]["source"], "cache")
+        self.assertEqual(self.activities().json["data"], [])
+
+    def test_activity_limits_have_separate_cache_entries(self):
+        self.connect()
+        self.assertEqual(self.activities(5).status_code, 200)
+        self.allow_refresh("activities")
+        self.assertEqual(self.activities(10).status_code, 200)
+        self.assertEqual(self.activities(5).json["meta"]["source"], "cache")
+        self.assertEqual(self.mocks[10].call_count, 2)
+
+    def test_new_resource_inputs_are_bounded_and_cannot_proxy_arbitrary_urls(self):
+        self.connect()
+        for path in ("/data/sleep?date=bad", f"/data/sleep?date={DAY}&date={DAY}",
+                     f"/data/sleep?date={DAY}&url=https://example.com", f"/data/activities?start={DAY}&end={DAY}&limit=21"):
+            self.assertEqual(self.client.get('/api/garmin' + path, headers=self.headers).status_code, 400)
+        for body in ({"resources": ["sleep"], "start": "2026-01-01", "end": "2026-01-02"},
+                     {"resources": ["activities"], "start": DAY, "end": DAY, "limit": True},
+                     {"resources": ["sleep", "steps"], "start": DAY, "end": DAY}):
+            self.assertEqual(self.client.post('/api/garmin/refresh', headers=self.headers, json=body).status_code, 400)
+
 
 class GarminClientTests(unittest.TestCase):
+    def test_sleep_and_activity_paths_fields_and_recorded_local_dates(self):
+        with patch.object(garmin_client, "_request", return_value=json.dumps(SLEEP)) as upstream:
+            self.assertEqual(garmin_client.fetch_sleep(TOKEN, DAY), SLEEP)
+            self.assertIn('date=' + DAY, upstream.call_args.args[0])
+        with patch.object(garmin_client, "_request", return_value=json.dumps({"dailySleepDTO": SLEEP})):
+            self.assertEqual(garmin_client.fetch_sleep(TOKEN, DAY)["dailySleepDTO"], SLEEP)
+        with patch.object(garmin_client, "_request", return_value=json.dumps(ACTIVITIES)) as upstream:
+            self.assertEqual(garmin_client.fetch_activities(TOKEN, DAY, DAY, 5), ACTIVITIES)
+            self.assertIn('limit=5', upstream.call_args.args[0])
+            self.assertIn('sortOrder=desc', upstream.call_args.args[0])
+            self.assertIn('excludeChildren=true', upstream.call_args.args[0])
+
+    def test_malformed_sleep_and_activities_are_rejected_without_becoming_empty_data(self):
+        for body in ('[]', '{"sleepTimeSeconds":true}', '{"calendarDate":"wrong"}', '{"sleepScores":[]}'):
+            with patch.object(garmin_client, "_request", return_value=body), self.assertRaises(GarminError):
+                garmin_client.fetch_sleep(TOKEN, DAY)
+        for data in ({}, [None], [{**ACTIVITIES[0], 'duration': True}], [ACTIVITIES[0], ACTIVITIES[0]]):
+            with patch.object(garmin_client, "_request", return_value=json.dumps(data)), self.assertRaises(GarminError):
+                garmin_client.fetch_activities(TOKEN, DAY, DAY, 5)
+
     def test_plain_text_jwt_and_steps_shape(self):
         with patch.object(garmin_client, "_request", return_value=TOKEN):
             token, expiry = garmin_client.obtain_token(KEY)

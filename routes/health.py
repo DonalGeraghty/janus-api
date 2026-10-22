@@ -26,6 +26,8 @@ def root():
             "set_garmin_connection": "PUT /api/garmin/connection",
             "disconnect_garmin": "DELETE /api/garmin/connection",
             "get_garmin_steps": "GET /api/garmin/data/steps?start=YYYY-MM-DD&end=YYYY-MM-DD",
+            "get_garmin_sleep": "GET /api/garmin/data/sleep?date=YYYY-MM-DD",
+            "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5",
             "refresh_garmin_steps": "POST /api/garmin/refresh",
             "get_ai_settings": "GET /api/user/ai-settings",
             "set_ai_settings": "PUT /api/user/ai-settings",

@@ -39,6 +39,18 @@
       ]
     },
     {
+      "path": "/api/garmin/data/activities",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/garmin/data/sleep",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
       "path": "/api/garmin/data/steps",
       "methods": [
         "GET"
@@ -273,7 +285,9 @@
       "set_garmin_connection": "PUT /api/garmin/connection",
       "set_openai_key": "PUT /api/user/openai-key",
       "set_push_settings": "PUT /api/user/push-settings",
-      "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}"
+      "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}",
+      "get_garmin_sleep": "GET /api/garmin/data/sleep?date=YYYY-MM-DD",
+      "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5"
     },
     "service": "Janus API"
   }

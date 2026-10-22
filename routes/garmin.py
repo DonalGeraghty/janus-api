@@ -53,9 +53,40 @@ def steps():
         raise GarminError("invalid_request", "Provide start and end dates only.", 400)
     return jsonify(status="success", **garmin_service.get_steps(*identity(), request.args["start"], request.args["end"]))
 
+
+@blueprint.get("/data/sleep")
+def sleep():
+    if set(request.args) != {"date"} or len(request.args.getlist("date")) != 1:
+        raise GarminError("invalid_request", "Provide a single sleep date.", 400)
+    return jsonify(status="success", **garmin_service.get_sleep(*identity(), request.args["date"]))
+
+
+@blueprint.get("/data/activities")
+def activities():
+    if not {"start", "end"} <= set(request.args) <= {"start", "end", "limit"} or any(len(request.args.getlist(key)) != 1 for key in request.args):
+        raise GarminError("invalid_request", "Provide start and end dates and an optional activity limit.", 400)
+    try:
+        limit = int(request.args.get("limit", "5"))
+    except ValueError:
+        raise GarminError("invalid_limit", "Activity limit must be an integer from 1 to 20.", 400) from None
+    return jsonify(status="success", **garmin_service.get_activities(*identity(), request.args["start"], request.args["end"], limit))
+
 @blueprint.post("/refresh")
 def refresh():
     body = request.get_json(silent=True)
-    if not isinstance(body, dict) or set(body) != {"resources", "start", "end"} or body["resources"] != ["steps"]:
-        raise GarminError("invalid_request", "Select the steps resource and provide start and end dates.", 400)
-    return jsonify(status="success", **garmin_service.get_steps(*identity(), body["start"], body["end"], force=True))
+    if (not isinstance(body, dict) or not {"resources", "start", "end"} <= set(body) <= {"resources", "start", "end", "limit"}
+            or not isinstance(body["resources"], list) or len(body["resources"]) != 1
+            or body["resources"][0] not in ("steps", "sleep", "activities")):
+        raise GarminError("invalid_request", "Select one of steps, sleep, or activities and provide start and end dates.", 400)
+    resource = body["resources"][0]
+    if resource != "activities" and "limit" in body:
+        raise GarminError("invalid_request", "Only activities accepts a limit.", 400)
+    if resource == "sleep":
+        if body["start"] != body["end"]:
+            raise GarminError("invalid_date_range", "Select a single sleep date.", 400)
+        result = garmin_service.get_sleep(*identity(), body["start"], force=True)
+    elif resource == "activities":
+        result = garmin_service.get_activities(*identity(), body["start"], body["end"], body.get("limit", 5), force=True)
+    else:
+        result = garmin_service.get_steps(*identity(), body["start"], body["end"], force=True)
+    return jsonify(status="success", **result)
