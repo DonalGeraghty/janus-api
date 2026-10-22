@@ -21,6 +21,7 @@ from .core import normalize_user_email
 from .nutrition import delete_nutrition_entries
 from .flashcards import delete_flashcards
 from .openai_credentials import delete_all_ai_credentials
+from .garmin import delete_garmin_account_data
 from .push import delete_push_data
 from .workouts import delete_workout_entries
 from ..logging_service import logger
@@ -577,6 +578,9 @@ def delete_user_account(email, expected_account_id):
         deletion_token,
     )
     if not credentials_deleted:
+        return False, "delete_failed"
+
+    if not delete_garmin_account_data(email_key, expected_account_id, deletion_token):
         return False, "delete_failed"
 
     if not delete_push_data(

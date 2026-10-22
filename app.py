@@ -1,4 +1,4 @@
-"""Janus API: shared backend for Aether, Minerva, and Nyx — authentication, nutrition, workout, and flashcard/Minerva-assistant data, and encrypted AI-provider credentials."""
+"""Janus API: shared authentication, app data, encrypted credentials, and Garmin access."""
 
 import os
 import hmac
@@ -22,6 +22,7 @@ from core.push_service import (
     PushSubscriptionDeleteInput,
     PushSubscriptionInput,
 )
+from core.garmin_routes import register_garmin_routes
 from services.firebase_service import (
     create_flashcard,
     create_nutrition_entry,
@@ -119,6 +120,9 @@ def _authenticated_identity():
     if not user or not account_id_matches(identity["account_id"], user):
         return None
     return identity
+
+
+register_garmin_routes(app, _authenticated_identity)
 
 
 @app.before_request
@@ -1615,6 +1619,11 @@ def root():
             "login": "POST /api/auth/login",
             "current_user": "GET /api/auth/me",
             "delete_account": "DELETE /api/auth/account",
+            "get_garmin_connection": "GET /api/garmin/connection",
+            "set_garmin_connection": "PUT /api/garmin/connection",
+            "disconnect_garmin": "DELETE /api/garmin/connection",
+            "get_garmin_steps": "GET /api/garmin/data/steps?start=YYYY-MM-DD&end=YYYY-MM-DD",
+            "refresh_garmin_steps": "POST /api/garmin/refresh",
             "get_ai_settings": "GET /api/user/ai-settings",
             "set_ai_settings": "PUT /api/user/ai-settings",
             "get_minerva_settings": "GET /api/user/minerva-settings",
