@@ -109,8 +109,6 @@ def get_health(email, account_id, resource, start, end, force=False):
     if resource not in HEALTH_RESOURCES:
         raise GarminError("invalid_resource", "Unknown Garmin resource.", 400)
     validate_range(start, end)
-    if resource in ("heart-rate", "fitness-age", "body-battery") and start != end:
-        raise GarminError("invalid_date_range", "Select one date for this resource.", 400)
     return _get_resource(email, account_id, resource, start, end,
                          lambda token: garmin_resources.fetch_health(resource, token, start, end), force)
 

@@ -9,7 +9,7 @@ from . import db_state
 from .core import normalize_user_email
 from .account_state import ACCOUNT_DELETION_FIELD, ACCOUNT_DELETION_TOKEN_FIELD, account_id_matches
 from ..garmin_errors import GarminError
-from ..garmin_catalog import PANEL_IDS
+from ..garmin_catalog import PANEL_IDS, RETIRED_PANEL_IDS
 
 
 def _validate_account(data, account_id):
@@ -94,8 +94,12 @@ def preferences(email, account_id, visible_panels=None):
             transaction.set(settings_ref, {"account_id": account_id, "visible_panels": visible_panels})
             return {"visible_panels": visible_panels}
         panels = stored.get("visible_panels") if stored and stored.get("account_id") == account_id else None
-        if not isinstance(panels, list) or any(panel not in PANEL_IDS for panel in panels):
+        if (not isinstance(panels, list)
+                or any(not isinstance(panel, str) or panel not in (*PANEL_IDS, *RETIRED_PANEL_IDS) for panel in panels)):
             panels = list(PANEL_IDS)
+        else:
+            # Retired choices must not reset the user's remaining selections.
+            panels = [panel for panel in panels if panel in PANEL_IDS]
         return {"visible_panels": panels}
 
     try:
