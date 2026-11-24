@@ -19,4 +19,7 @@ habit_checkins_memory = {}
 flashcards_memory = {}
 flashcard_reviews_memory = {}
 push_subscriptions_memory = {}
+finance_rules_memory = {}
+finance_rule_history_memory = {}
+finance_settings_memory = {}
 memory_lock = RLock()

@@ -31,7 +31,7 @@ class ApplicationFactoryTests(unittest.TestCase):
         self.assertIsNot(first, second)
         first.config["INSTANCE_LABEL"] = "changed"
         self.assertEqual(second.config["INSTANCE_LABEL"], "second")
-        expected = {"auth", "ai_settings", "nutrition", "push", "aether_habits", "garmin", "health"}
+        expected = {"auth", "ai_settings", "nutrition", "push", "aether_habits", "garmin", "health", "finance"}
         self.assertEqual(set(first.blueprints), expected)
         self.assertEqual(set(second.blueprints), expected)
         self.assertEqual(len(first.before_request_funcs[None]), 1)
