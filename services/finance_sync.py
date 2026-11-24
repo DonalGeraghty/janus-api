@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from core.finance_sheets import LEDGER_RANGE, build_coverage, rows_to_transactions
+from core.finance_sheets import LEDGER_RANGE, SNAPSHOT_RANGE, build_coverage, rows_to_transactions
 from services import google_sheets
 from services.credential_service import (
     CredentialConfigurationError,
@@ -94,6 +94,11 @@ def sync_now(email, account_id):
             status["error"] = "validation_failed"
             status["stale"] = email in db_state.finance_snapshots_memory
             raise FinanceError("Ledger validation failed; last good data is retained.", 422, details=errors)
+        snapshot_grid = None
+        try:
+            snapshot_grid = google_sheets.fetch_values(connection["workbook_id"], SNAPSHOT_RANGE, token)
+        except google_sheets.SheetsError:
+            warnings.append("snapshot tab unavailable; net worth will report an explicit unavailable state")
         fetched_at = _now()
         snapshot = {
             "snapshot_id": uuid4().hex,
@@ -102,6 +107,7 @@ def sync_now(email, account_id):
             "workbook_id": connection["workbook_id"],
             "rule_set_version": list_rules(email, account_id)["rule_set_version"],
             "rows": transactions,
+            "snapshot_grid": snapshot_grid,
             "warnings": warnings,
             "coverage": build_coverage(transactions, fetched_at),
         }
