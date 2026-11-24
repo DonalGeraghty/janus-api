@@ -87,7 +87,7 @@ class FinanceChatApiTests(unittest.TestCase):
         self.assertEqual(result.status_code, 403)
         result = self.client.post("/api/finance/chat", headers=self.headers, json={"message": "hi"})
         self.assertEqual(result.status_code, 409)
-        self.assertEqual(result.get_json()["details"]["code"], "sync_required")
+        self.assertEqual(result.get_json()["error"], "sync_required")
         self.client.post("/api/finance/sync", headers=self.headers)
         result = self.client.post("/api/finance/chat", headers=self.headers, json={"message": "hi"})
         self.assertEqual(result.status_code, 409)

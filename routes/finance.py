@@ -83,6 +83,10 @@ def finance_error(error):
     body = {"status": "error", "error": str(error)}
     if error.details:
         body["details"] = error.details
+        code = error.details.get("code") if isinstance(error.details, dict) else None
+        if code:
+            body["error"] = code
+            body["message"] = str(error)
     return jsonify(**body), error.status
 
 
@@ -377,8 +381,8 @@ def chat():
         return jsonify(status="error", error=str(error)), 400
     snapshot = finance_sync.get_snapshot(email)
     if snapshot is None:
-        return jsonify(status="error", error="Sync the ledger first (POST /api/finance/sync).",
-                       details={"code": "sync_required"}), 409
+        return jsonify(status="error", error="sync_required",
+                       message="Sync the ledger first (POST /api/finance/sync)."), 409
     selection, credential, error = selected_ai_credential(email, account_id)
     if error:
         return jsonify(status="error", error=error, message="Secure AI settings are unavailable."), 503
