@@ -41,6 +41,8 @@ Empty sleep records, empty calendar dates, and valid records belonging to anothe
 
 Garmin diagnostics go to the existing Cloud Run application logs (stderr). Search for `Garmin` in the Janus service logs to see resource/error codes, safe validation reasons, cached-fallback decisions, upstream HTTP failures, and upstream failure duration. Empty or mismatched sleep dates log a fixed reason without date values. Logs exclude credentials, user identifiers, and raw Garmin health data. No additional logging service is required.
 
+Read-only ledger sync: `POST /api/finance/sync` reads the account's workbook (`combined data` A:Q) with the stored read-only token, mapping columns by header name. Sheets native values are parsed explicitly (1900-system serial dates, native numerics); money is handled as `Decimal` and serialized as decimal strings with `currency: EUR`, timezone `Europe/Dublin`; unknown values stay null, never zero. Snapshots are derived, in-memory and per-account: one sync lock per account, atomic swap on success, and a failed or rejected sync retains the last good snapshot with `stale: true` (a 401/403 from Google maps to 409 `sheets_reconnect_required`). After a restart the status endpoint reports `sync_required` rather than empty data. The snapshot cache is never shared across instances or treated as durable; a private Cloud Storage snapshot is the follow-up if multi-instance stability is required. Janus never writes to the workbook.
+
 ## Retired flashcard functionality
 
 Minerva now uses Garmin Overview and Account. The former flashcard CRUD/due/review endpoints, `POST /api/minerva/respond`, and `GET/PUT /api/user/minerva-settings` are removed and return 404. Card drafting prompts, provider methods, scheduling, and operational card storage code are removed too.
@@ -58,6 +60,8 @@ Janus hosts each account's own finance rule set and (later) read-only access to 
 | `GET` | `/api/finance/connection` | Safe connection metadata (`connected`, `workbook_id`, `last_four`) |
 | `PUT` | `/api/finance/connection` | Validate and KMS-encrypt `{ "access_token": "...", "workbook_id": "..." }` |
 | `DELETE` | `/api/finance/connection` | Remove the stored token; saved rules and metadata are retained |
+| `POST` | `/api/finance/sync` | Pull `combined data` A:Q via Sheets API (UNFORMATTED_VALUE), validate, atomically publish an in-memory snapshot; failed sync keeps last good data with `stale` |
+| `GET` | `/api/finance/sync/status` | Last success/attempt, snapshot ID, rule-set version, stale flag, coverage (months, cutoff) and `sync_required` after restart |
 | `GET` | `/api/finance/rules?include_deleted=&scope=&status=` | List rules and the current `rule_set_version` |
 | `POST` | `/api/finance/rules` | Create one validated rule (201) |
 | `PUT` | `/api/finance/rules/{rule_id}` | Version-checked update (`revision` required; 409 on mismatch) |

@@ -187,7 +187,11 @@ def delete_finance_connection(email, account_id, deletion_token=None):
             return _status(False, settings)
 
         try:
-            return execute(db_state.db.transaction())
+            result = execute(db_state.db.transaction())
+            with db_state.memory_lock:
+                db_state.finance_snapshots_memory.pop(email, None)
+                db_state.finance_sync_status_memory.pop(email, None)
+            return result
         except FinanceConnectionError:
             raise
         except Exception as error:
@@ -197,6 +201,8 @@ def delete_finance_connection(email, account_id, deletion_token=None):
     with db_state.memory_lock:
         _guard(db_state.auth_users_memory.get(email), account_id, deletion_token)
         db_state.finance_connection_memory.pop(email, None)
+        db_state.finance_snapshots_memory.pop(email, None)
+        db_state.finance_sync_status_memory.pop(email, None)
         settings = copy.deepcopy(db_state.finance_settings_memory.get(email, {}))
         connection = dict(settings.get("finance_connection") or {})
         workbook_id = connection.get("workbook_id")

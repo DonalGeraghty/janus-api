@@ -103,6 +103,18 @@
       ]
     },
     {
+      "path": "/api/finance/sync",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/finance/sync/status",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
       "path": "/api/garmin/activities/<int:activity_id>",
       "methods": [
         "GET",
@@ -368,6 +380,7 @@
       "finance_rules_history": "GET /api/finance/rules/history; POST /api/finance/rules/restore/{version}",
       "finance_rules_import": "POST /api/finance/rules/import (preview or commit)",
       "finance_rules_test": "POST /api/finance/rules/test",
+      "finance_sync": "POST /api/finance/sync; GET /api/finance/sync/status",
       "get_ai_credential_status": "GET /api/user/ai-credentials/{provider}",
       "get_ai_settings": "GET /api/user/ai-settings",
       "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5",

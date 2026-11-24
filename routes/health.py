@@ -59,6 +59,7 @@ def root():
             "habit_settings": "PUT /api/habits/settings",
             "draft_habits": "POST /api/habits/draft",
             "finance_connection": "GET/PUT/DELETE /api/finance/connection",
+            "finance_sync": "POST /api/finance/sync; GET /api/finance/sync/status",
             "finance_rules": "GET/POST /api/finance/rules; PUT/DELETE /api/finance/rules/{rule_id}",
             "finance_rules_import": "POST /api/finance/rules/import (preview or commit)",
             "finance_rules_export": "GET /api/finance/rules/export?format=csv|json",

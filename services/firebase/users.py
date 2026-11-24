@@ -417,6 +417,8 @@ def _clear_user_memory(email_key):
         db_state.finance_rule_history_memory.pop(email_key, None)
         db_state.finance_settings_memory.pop(email_key, None)
         db_state.finance_connection_memory.pop(email_key, None)
+        db_state.finance_snapshots_memory.pop(email_key, None)
+        db_state.finance_sync_status_memory.pop(email_key, None)
 
 
 def _mark_memory_account_deleting(
