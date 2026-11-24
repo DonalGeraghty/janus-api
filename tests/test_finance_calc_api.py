@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 from app import app
 from core import finance_calc
-from core.finance_sheets import SHEETS_EPOCH
+from core.finance_sheets import SHEETS_EPOCH, parse_date, rows_to_transactions
+from decimal import Decimal
 from services import google_sheets
 from services.firebase import db_state
 
@@ -98,8 +99,8 @@ class AcceptanceCaseTests(unittest.TestCase):
         self.assertEqual(t["net"], "-1200.00")
 
     def test_excluded_flag_and_confirmed_duplicate(self):
-        t = totals([row(amount_eur="-10", include_provisional_totals="NO"),
-                    row(amount_eur="-10", event_type="confirmed_duplicate")])
+        t = totals([row(transaction_id="excluded", amount_eur="-10", include_provisional_totals="NO"),
+                    row(transaction_id="duplicate", amount_eur="-10", event_type="confirmed_duplicate")])
         self.assertEqual(t["spending"], "0.00")
 
     def test_identical_legitimate_purchases_not_deduplicated(self):
@@ -145,6 +146,53 @@ class AcceptanceCaseTests(unittest.TestCase):
         self.assertEqual(result["latest"]["net"], "-163000.00")
         self.assertEqual(finance_calc.parse_net_worth([["A", "B"]])["available"], False)
         self.assertEqual(finance_calc.parse_net_worth(None)["available"], False)
+
+
+    def test_native_serial_known_epoch(self):
+        self.assertEqual(parse_date(25569), "1970-01-01")
+        self.assertEqual(parse_date(46023), "2026-01-01")
+
+    def test_real_schema_sinking_events_and_all_aggregates(self):
+        grid = [HEADER,
+                ["a", serial(2026, 10, 1), "2026-10", "MONZO", "Transfer to Sinking Fund", "", -1800, 0, "Transfer", "Transfers", "Financial", "", "Imported", "", None, "YES", ""],
+                ["b", serial(2026, 10, 1), "2026-10", "MONZO", "Sinking Fund contribution receiving", "", 1800, 0, "Transfer", "Transfers", "Financial", "", "Imported", "", None, "YES", ""],
+                ["c", serial(2026, 11, 1), "2026-11", "BOI", "Apartment management fee", "", -2000, 0, "Expense", "Housing", "Fixed Essential", "", "Imported", "Paid from sinking fund", None, "YES", ""],
+                ["d", serial(2026, 11, 2), "2026-11", "BOI", "Unknown inclusion", "", -300, 0, "Expense", "Housing", "", "", "Imported", "", None, "", ""]]
+        rows, warnings, errors = rows_to_transactions(grid)
+        self.assertFalse(errors)
+        processed = derived(rows)
+        self.assertEqual(processed[0]["derived"]["effective_budget_amount_eur"], "-1800.00")
+        self.assertEqual(processed[2]["derived"]["effective_budget_amount_eur"], "-200.00")
+        self.assertTrue(processed[3]["derived"]["excluded"])
+        for start, end in [(None, None), ("2026-11", "2026-11")]:
+            net = Decimal(finance_calc.budget_view(processed, start, end)["adjusted_totals"]["net"])
+            for output in (finance_calc.cashflow(processed, start, end), finance_calc.trends(processed, start, end)):
+                self.assertEqual(net, sum(Decimal(r["net"]) for r in output))
+            cats = finance_calc.cashflow(processed, start, end, "category")
+            self.assertEqual(net, sum(Decimal(v) for r in cats for v in r["categories"].values()))
+            for field in ("category", "merchant"):
+                self.assertEqual(net, sum(Decimal(r["total"]) for r in finance_calc.aggregates(processed, start, end, field)))
+
+    def test_duplicate_contribution_does_not_fund_bill_twice(self):
+        contribution = row(transaction_id="a", amount_eur="-100", type="Transfer", event_type="sinking_contribution_outgoing", fund_purpose="local_property_tax")
+        bill = row(transaction_id="b", amount_eur="-200", date="2026-11-06", event_type="covered_sinking_bill", fund_purpose="local_property_tax")
+        rows = derived([contribution, dict(contribution), bill])
+        self.assertEqual(rows[2]["derived"]["effective_budget_amount_eur"], "-100.00")
+        self.assertEqual(finance_calc.budget_view(rows, None, None)["adjusted_totals"]["spending"], "-200.00")
+
+    def test_conflicting_ids_are_held_for_review(self):
+        rows = derived([row(amount_eur="-10"), row(amount_eur="-20")])
+        self.assertTrue(all(r["derived"]["excluded"] and r["derived"]["review"] for r in rows))
+
+    def test_horizontal_snapshot_real_headers(self):
+        header = ["Date", "SUPERSAVER", "BOI Goalsaver", "BOI Current Account", "Revolut", "Monzo", "Cash Totals", "Pension Mercer Workday", "Pension Efx New Ireland", "Pension SIE Zurich", "Pension Totals", "Dejiro", "Mortgage (Owed)", "Apartment Value"]
+        grid = [header, [serial(2026, 10, 31), 100, 200, 300, 400, 500, 1500, 1000, 2000, 3000, 6000, 2500, -100000, 200000],
+                [serial(2026, 11, 30), 100]]
+        result = finance_calc.parse_net_worth(grid)
+        self.assertEqual(result["latest"]["net"], "110000.00")
+        self.assertEqual(result["latest"]["date"], "2026-10-31")
+        self.assertTrue(result["provisional"])
+        self.assertTrue(result["warnings"])
 
 
 GRID = [
