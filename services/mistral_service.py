@@ -247,3 +247,19 @@ def recommend_meals(context, email, api_key, model):
         ),
     })
     return result
+
+
+def finance_chat(system, messages, email, api_key, model):
+    try:
+        with Mistral(api_key=api_key) as client:
+            response = client.chat.complete(
+                model=_normalize_model(model),
+                messages=[{"role": "system", "content": system}] + list(messages),
+                temperature=0,
+            )
+        content = response.choices[0].message.content if response.choices else None
+        if not isinstance(content, str) or not content.strip():
+            raise MistralServiceError("Mistral returned no answer")
+        return content.strip()
+    except (errors.MistralError, httpx.RequestError, ValidationError, json.JSONDecodeError, TypeError) as error:
+        _raise_mapped_mistral_error(error)

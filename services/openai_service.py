@@ -275,3 +275,21 @@ def recommend_meals(context, email, api_key, model=None):
         ),
     })
     return result
+
+
+def finance_chat(system, messages, email, api_key, model=None):
+    """Plain-text finance answer; all figures arrive pre-computed in messages."""
+    try:
+        response = OpenAI(api_key=api_key).responses.create(
+            model=_model_name(model),
+            input=[{"role": "system", "content": system}] + list(messages),
+            safety_identifier=_safety_identifier(email),
+            store=False,
+        )
+        text = getattr(response, "output_text", None)
+        if not isinstance(text, str) or not text.strip():
+            raise OpenAIServiceError("OpenAI returned no answer")
+        return text.strip()
+    except (AuthenticationError, PermissionDeniedError, RateLimitError, APIConnectionError,
+            APITimeoutError, APIStatusError, ValidationError, json.JSONDecodeError, TypeError) as error:
+        _raise_mapped_openai_error(error)

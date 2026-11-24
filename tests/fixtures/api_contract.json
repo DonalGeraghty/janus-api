@@ -49,6 +49,12 @@
       ]
     },
     {
+      "path": "/api/finance/chat",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
       "path": "/api/finance/connection",
       "methods": [
         "DELETE"
@@ -371,6 +377,7 @@
       "finance_budgets": "GET /api/finance/budgets",
       "finance_cashflow": "GET /api/finance/cashflow?period=&by=month|category",
       "finance_categories": "GET /api/finance/categories?period=",
+      "finance_chat": "POST /api/finance/chat {message, history}",
       "finance_connection": "GET/PUT/DELETE /api/finance/connection",
       "finance_merchants": "GET /api/finance/merchants?period=",
       "finance_net_worth": "GET /api/finance/net-worth",

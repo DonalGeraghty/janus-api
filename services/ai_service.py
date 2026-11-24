@@ -122,3 +122,11 @@ def recommend_meals(context, email, api_key, provider="openai", model=None):
         api_key,
         model,
     )
+
+
+def finance_chat(system, messages, email, api_key, provider="openai", model=None):
+    """Finance Q&A over a server-computed context pack; the model never calculates."""
+    if not is_supported_provider(provider):
+        raise ValueError("invalid_provider")
+    return _call_provider(provider, "finance_chat", system, messages, email, api_key,
+                          _validated_model(provider, model))

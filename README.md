@@ -6,6 +6,8 @@ Read-only ledger sync: `POST /api/finance/sync` reads the account's workbook (`c
 
 Read API: every endpoint reads one pinned snapshot (meta carries `snapshot_id` + `rule_set_version`; no mixed versions) and requires a prior successful sync (`409 sync_required` otherwise). Periods are whole calendar months in Europe/Dublin (`this_month` default, `last_month`, `last_3/6/12` including current, `ytd`, `all`, or custom `start`/`end`); missing months are reported as gaps, never zeros. Budget math sums signed Amount EUR for Income/Expense/Refund with inclusion YES, applies active rules deterministically (priority desc, rule_id asc; first match wins) with per-row reasons, excludes transfers/savings/Food Pot from budget cash flow, reports investment principal separately, never subtracts Fee EUR twice, counts receipt groups once, and enforces duplicate/failed/reverted exclusions in code regardless of rules. The sinking fund keeps a stateful recognised-balance ledger across all history; unknown opening recognition blocks unsupported exclusions and is flagged provisional. Money is Decimal, serialized as decimal strings in EUR.
 
+Finance chat: `POST /api/finance/chat` requires a synced snapshot and the account's selected, KMS-stored AI credential. The backend runs the read-only tool registry (`core/finance_chat.py`) itself and sends the bounded pack (<=24 KiB) with the question to the chosen provider — the model never calculates and all financial text is treated as data. Responses carry snapshot/rule-set metadata, coverage, stale flag and a privacy note; they are `no-store` and never logged.
+
 ## Retired flashcard functionality
 
 Minerva now uses its finance dashboard and Account pages. The former flashcard CRUD/due/review endpoints, `POST /api/minerva/respond`, and `GET/PUT /api/user/minerva-settings` are removed and return 404. Card drafting prompts, provider methods, scheduling, and operational card storage code are removed too.
@@ -32,6 +34,7 @@ Janus hosts each account's own finance rule set and (later) read-only access to 
 | `GET` | `/api/finance/net-worth` | Dated snapshot-tab balances; subtotals never double counted; explicit unavailable state when the tab is missing/unrecognized |
 | `GET` | `/api/finance/sinking-funds` | Stateful recognised-balance ledger; provisional until the opening balance is verified |
 | `GET` | `/api/finance/budgets` | Explicit `available: false` until verified budget data exists |
+| `POST` | `/api/finance/chat` | `{message, history?}` answered by the selected provider over a server-computed, owner-scoped context pack of read-only tool results (summary, transactions, categories, merchants, cashflow, period comparison, budgets, sinking funds, net worth, rules, data quality); no write tools; prompt/answer not persisted |
 | `GET` | `/api/finance/rules?include_deleted=&scope=&status=` | List rules and the current `rule_set_version` |
 | `POST` | `/api/finance/rules` | Create one validated rule (201) |
 | `PUT` | `/api/finance/rules/{rule_id}` | Version-checked update (`revision` required; 409 on mismatch) |
