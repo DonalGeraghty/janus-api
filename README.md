@@ -382,6 +382,7 @@ Configure these GitHub Actions secrets:
 | `VAPID_PUBLIC_KEY` | Sent to browsers when they subscribe to Web Push |
 | `VAPID_SUBJECT` | Contact `mailto:`/HTTPS URL required by the Web Push protocol |
 | `PUSH_CRON_SECRET` | Shared secret the Cloud Scheduler job sends as `X-Cron-Secret` to authorize `/api/internal/push/reminders` |
+| `FINANCE_OWNER_EMAILS` | Comma-separated Janus account emails allowed to use `/api/finance/*`; finance stays disabled (403 for everyone) while this secret is empty or unset |
 
 The workflow also creates or updates a Cloud Scheduler job (still named `nyx-push-reminders`, a pre-rename name kept because renaming it has no functional benefit) that calls that endpoint every five minutes, but only when `PUSH_CRON_SECRET` is set.
 
