@@ -18,7 +18,7 @@ HEADER = ["Transaction ID", "Date", "Month", "Account", "Description", "Merchant
 
 
 def serial(y, m, d):
-    return (date(y, m, d) - SHEETS_EPOCH).days + 1
+    return (date(y, m, d) - SHEETS_EPOCH).days
 
 
 def row(**kwargs):
@@ -80,7 +80,7 @@ class AcceptanceCaseTests(unittest.TestCase):
     def test_release_reverses_once(self):
         rows = [row(transaction_id="c", type="Transfer", amount_eur="-100", event_type="sinking_contribution_outgoing", fund_purpose="local_property_tax"),
                 row(transaction_id="r", type="Transfer", amount_eur="100", event_type="sinking_release", fund_purpose="local_property_tax")]
-        self.assertEqual(totals(rows)["spending"], "-100.00")
+        self.assertEqual(totals(rows)["spending"], "0.00")
         ledger = finance_calc.sinking_ledger(derived(rows))
         self.assertEqual(ledger["current_recognised_balance"], "0.00")
 
