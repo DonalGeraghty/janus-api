@@ -437,6 +437,7 @@ def delete_finance_account_data(email, account_id, deletion_token):
         for name in (RULES_COLLECTION, HISTORY_COLLECTION, SETTINGS_COLLECTION):
             for document in user_ref.collection(name).stream():
                 firestore.transactional(remove)(db_state.db.transaction(), document.reference)
+        firestore.transactional(remove)(db_state.db.transaction(), user_ref.collection("private").document("finance"))
         return True
     except Exception:
         return False

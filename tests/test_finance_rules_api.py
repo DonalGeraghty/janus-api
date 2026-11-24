@@ -1,9 +1,9 @@
-"""Finance rules API: owner-only access, CRUD, CSV import/export, dry-run, history."""
-import os
+"""Finance API: per-account connection gate, rules CRUD, CSV import/export, dry-run, history."""
 import unittest
 from unittest.mock import patch
 
 from app import app
+from services.credential_service import CredentialEncryptionError
 from services.firebase import db_state
 
 
@@ -21,23 +21,28 @@ RULE = {
     "status": "active", "source_section": "5", "description": "Negative actual spending",
 }
 
+TOKEN = "ya29.synthetic-google-token-0123456789abcdef"
+WORKBOOK = "1RUiRPyU2DnoXe5Tbhd6BZXMCdJtxg7FP3UQwCd2i_e0"
+
 
 class FinanceRulesApiTests(unittest.TestCase):
     def setUp(self):
         db_state.users_collection_ref = None
         db_state.db = None
         self.stores = (db_state.auth_users_memory, db_state.finance_rules_memory,
-                       db_state.finance_rule_history_memory, db_state.finance_settings_memory)
+                       db_state.finance_rule_history_memory, db_state.finance_settings_memory,
+                       db_state.finance_connection_memory)
         for store in self.stores:
             store.clear()
-        self.env = patch.dict(os.environ, {"FINANCE_OWNER_EMAILS": "owner@example.com"})
-        self.env.start()
+        self.encrypt = patch("routes.finance.encrypt_api_key", return_value="fake-kms-ciphertext")
+        self.encrypt.start()
         self.client = app.test_client()
         self.headers = self.register("owner@example.com")
+        self.connect(self.headers)
         self.other = self.register("other@example.com")
 
     def tearDown(self):
-        self.env.stop()
+        self.encrypt.stop()
         for store in self.stores:
             store.clear()
 
@@ -46,23 +51,64 @@ class FinanceRulesApiTests(unittest.TestCase):
         self.assertEqual(result.status_code, 201)
         return {"Authorization": f"Bearer {result.get_json()['token']}"}
 
+    def connect(self, headers, token=TOKEN, workbook=WORKBOOK):
+        result = self.client.put("/api/finance/connection", headers=headers,
+                                 json={"access_token": token, "workbook_id": workbook})
+        self.assertEqual(result.status_code, 200, result.get_json())
+        return result.get_json()["connection"]
+
     def create(self, **overrides):
         data = {**RULE, **overrides}
         result = self.client.post("/api/finance/rules", headers=self.headers, json=data)
         self.assertEqual(result.status_code, 201, result.get_json())
         return result.get_json()
 
-    def test_all_routes_require_authentication_and_owner_entitlement(self):
+    def test_all_routes_require_authentication_and_a_connection(self):
         routes = [("get", "/api/finance/rules"), ("post", "/api/finance/rules"),
                   ("put", "/api/finance/rules/T01"), ("delete", "/api/finance/rules/T01"),
                   ("post", "/api/finance/rules/import"), ("get", "/api/finance/rules/export"),
                   ("post", "/api/finance/rules/test"), ("get", "/api/finance/rules/history"),
-                  ("post", "/api/finance/rules/restore/1")]
+                  ("post", "/api/finance/rules/restore/1"), ("get", "/api/finance/connection"),
+                  ("put", "/api/finance/connection"), ("delete", "/api/finance/connection")]
         for method, path in routes:
             self.assertEqual(getattr(self.client, method)(path).status_code, 401, path)
-            result = getattr(self.client, method)(path, headers=self.other, json={"csv": CSV_SEED, "mode": "preview", "rows": [{}]})
-            self.assertEqual(result.status_code, 403, path)
-            self.assertEqual(result.get_json()["error"], "forbidden")
+            result = getattr(self.client, method)(path, headers=self.other, json={"csv": CSV_SEED, "mode": "preview", "rows": [{}], "access_token": TOKEN, "workbook_id": WORKBOOK})
+            if path == "/api/finance/connection":
+                self.assertIn(result.status_code, (200, 400), path)
+            else:
+                self.assertEqual(result.status_code, 403, path)
+                self.assertEqual(result.get_json()["error"], "finance_not_connected")
+
+    def test_connection_crud_and_validation(self):
+        status = self.client.get("/api/finance/connection", headers=self.other).get_json()["connection"]
+        self.assertFalse(status["connected"])
+        bad = self.client.put("/api/finance/connection", headers=self.other, json={"access_token": "short", "workbook_id": WORKBOOK})
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.get_json()["error"], "invalid_access_token")
+        bad = self.client.put("/api/finance/connection", headers=self.other, json={"access_token": TOKEN, "workbook_id": "not a workbook!"})
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(bad.get_json()["error"], "invalid_workbook_id")
+        connected = self.connect(self.other)
+        self.assertTrue(connected["connected"])
+        self.assertEqual(connected["workbook_id"], WORKBOOK)
+        self.assertEqual(connected["last_four"], TOKEN[-4:])
+        self.assertEqual(db_state.finance_connection_memory["other@example.com"]["ciphertext"], "fake-kms-ciphertext")
+        self.assertNotIn(TOKEN, str(db_state.finance_connection_memory))
+        self.assertEqual(self.client.get("/api/finance/rules", headers=self.other).status_code, 200)
+        removed = self.client.delete("/api/finance/connection", headers=self.other).get_json()["connection"]
+        self.assertFalse(removed["connected"])
+        self.assertEqual(removed["workbook_id"], WORKBOOK)
+        self.assertEqual(self.client.get("/api/finance/rules", headers=self.other).status_code, 403)
+
+    def test_connection_save_fails_closed_without_kms(self):
+        self.encrypt.stop()
+        with patch("routes.finance.encrypt_api_key", side_effect=CredentialEncryptionError("no kms")):
+            result = self.client.put("/api/finance/connection", headers=self.other,
+                                     json={"access_token": TOKEN, "workbook_id": WORKBOOK})
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.get_json()["error"], "credential_service_unavailable")
+        self.assertEqual(self.client.get("/api/finance/rules", headers=self.other).status_code, 403)
+        self.encrypt.start()
 
     def test_responses_are_never_cached(self):
         result = self.client.get("/api/finance/rules", headers=self.headers)
@@ -212,14 +258,16 @@ class FinanceRulesApiTests(unittest.TestCase):
         self.assertEqual(len(self.client.get("/api/finance/rules?status=review", headers=self.headers).get_json()["rules"]), 1)
         self.assertEqual(self.client.get("/api/finance/rules?status=bogus", headers=self.headers).get_json()["rules"], [])
 
-    def test_account_deletion_removes_finance_data(self):
+    def test_account_deletion_removes_finance_data_and_connection(self):
         self.create()
         self.assertIn("owner@example.com", db_state.finance_rules_memory)
+        self.assertIn("owner@example.com", db_state.finance_connection_memory)
         result = self.client.delete("/api/auth/account", headers=self.headers, json={"password": "password123"})
         self.assertEqual(result.status_code, 200, result.get_json())
         self.assertNotIn("owner@example.com", db_state.finance_rules_memory)
         self.assertNotIn("owner@example.com", db_state.finance_rule_history_memory)
         self.assertNotIn("owner@example.com", db_state.finance_settings_memory)
+        self.assertNotIn("owner@example.com", db_state.finance_connection_memory)
 
 
 if __name__ == "__main__":
