@@ -31,7 +31,7 @@ class ApplicationFactoryTests(unittest.TestCase):
         self.assertIsNot(first, second)
         first.config["INSTANCE_LABEL"] = "changed"
         self.assertEqual(second.config["INSTANCE_LABEL"], "second")
-        expected = {"auth", "ai_settings", "nutrition", "push", "aether_habits", "garmin", "health", "finance"}
+        expected = {"auth", "ai_settings", "nutrition", "push", "aether_habits", "health", "finance"}
         self.assertEqual(set(first.blueprints), expected)
         self.assertEqual(set(second.blueprints), expected)
         self.assertEqual(len(first.before_request_funcs[None]), 1)
@@ -49,15 +49,15 @@ class ApplicationFactoryTests(unittest.TestCase):
     def test_protected_endpoints_still_require_authentication(self):
         client = create_app({"TESTING": True}).test_client()
         for path in ("/api/auth/me", "/api/user/ai-settings", "/api/user/push-settings",
-                     "/api/nutrition/entries", "/api/habits", "/api/garmin/connection"):
+                     "/api/nutrition/entries", "/api/habits", "/api/finance/connection"):
             response = client.get(path)
             self.assertEqual(response.status_code, 401, path)
             self.assertEqual(response.get_json()["status"], "error", path)
-        self.assertEqual(client.get("/api/garmin/connection").headers["Cache-Control"], "no-store")
+        self.assertEqual(client.get("/api/finance/connection").headers["Cache-Control"], "no-store")
 
     def test_cors_preflight_still_allows_authenticated_json_requests(self):
         client = create_app({"TESTING": True}).test_client()
-        for path, method in (("/api/garmin/connection", "PUT"), ("/api/user/ai-settings", "PUT"), ("/api/habits", "POST")):
+        for path, method in (("/api/finance/connection", "PUT"), ("/api/user/ai-settings", "PUT"), ("/api/habits", "POST")):
             response = client.options(path, headers={
                 "Origin": "https://minerva.example",
                 "Access-Control-Request-Method": method,
