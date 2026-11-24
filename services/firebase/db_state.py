@@ -23,4 +23,6 @@ finance_rules_memory = {}
 finance_rule_history_memory = {}
 finance_settings_memory = {}
 finance_connection_memory = {}
+finance_snapshots_memory = {}
+finance_sync_status_memory = {}
 memory_lock = RLock()

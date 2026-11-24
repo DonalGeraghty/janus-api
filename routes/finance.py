@@ -37,6 +37,7 @@ from services.firebase.finance_rules import (
     test_rules,
     update_rule,
 )
+from services import finance_sync
 
 
 blueprint = Blueprint("finance", __name__, url_prefix="/api/finance")
@@ -204,6 +205,18 @@ def rules_test():
     rule_ids = body.get("rule_ids")
     return jsonify(status="success", **test_rules(
         identity["email"], identity["account_id"], rows, rule_ids))
+
+
+@blueprint.post("/sync")
+def ledger_sync():
+    identity = g.finance_identity
+    return jsonify(status="success", sync=finance_sync.sync_now(identity["email"], identity["account_id"])), 201
+
+
+@blueprint.get("/sync/status")
+def ledger_sync_status():
+    identity = g.finance_identity
+    return jsonify(status="success", sync=finance_sync.sync_status(identity["email"], identity["account_id"]))
 
 
 @blueprint.get("/rules/history")
