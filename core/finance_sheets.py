@@ -51,7 +51,7 @@ def parse_serial_date(value):
         return None
     if serial < 1 or serial > 80000:
         return None
-    return (SHEETS_EPOCH + timedelta(days=serial - 1)).isoformat()
+    return (SHEETS_EPOCH + timedelta(days=serial)).isoformat()
 
 
 def parse_date(value):
@@ -173,7 +173,7 @@ def rows_to_transactions(values):
 
 def _money_str(value, row, warnings):
     amount = parse_money(value)
-    return None if amount is None else format(amount, "f")
+    return None if amount is None or not amount.is_finite() else format(amount, "f")
 
 
 def build_coverage(transactions, fetched_at):
