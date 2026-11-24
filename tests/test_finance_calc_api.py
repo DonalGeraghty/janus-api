@@ -1,5 +1,6 @@
 """Finance calculations and read API: acceptance cases, endpoints, pinning, auth."""
 import unittest
+from itertools import count
 from datetime import date
 from unittest.mock import patch
 
@@ -22,8 +23,11 @@ def serial(y, m, d):
     return (date(y, m, d) - SHEETS_EPOCH).days
 
 
+_fixture_ids = count(1)
+
+
 def row(**kwargs):
-    base = {"row": kwargs.pop("row", 1), "transaction_id": kwargs.pop("transaction_id", "T-1"),
+    base = {"row": kwargs.pop("row", 1), "transaction_id": kwargs.pop("transaction_id", f"T-{next(_fixture_ids)}"),
             "date": kwargs.pop("date", "2026-11-05"), "month": kwargs.pop("month", "2026-11"),
             "account": "BOI", "description": "x", "merchant": None, "amount_eur": "0",
             "fee_eur": None, "type": "Expense", "category": "General", "spending_class": None,
@@ -181,7 +185,7 @@ class AcceptanceCaseTests(unittest.TestCase):
         self.assertEqual(finance_calc.budget_view(rows, None, None)["adjusted_totals"]["spending"], "-200.00")
 
     def test_conflicting_ids_are_held_for_review(self):
-        rows = derived([row(amount_eur="-10"), row(amount_eur="-20")])
+        rows = derived([row(transaction_id="conflict", amount_eur="-10"), row(transaction_id="conflict", amount_eur="-20")])
         self.assertTrue(all(r["derived"]["excluded"] and r["derived"]["review"] for r in rows))
 
     def test_horizontal_snapshot_real_headers(self):
