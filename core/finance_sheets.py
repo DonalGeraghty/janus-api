@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 
 SHEETS_EPOCH = date(1899, 12, 30)  # Google Sheets 1900 date system
 LEDGER_RANGE = "'combined data'!A:Q"
+SNAPSHOT_RANGE = "'snapshot'!A:Z"
 CURRENCY = "EUR"
 TIMEZONE = "Europe/Dublin"
 MAX_ROWS = 50_000

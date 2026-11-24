@@ -12,6 +12,7 @@ from services.firebase import db_state
 TOKEN = "ya29.synthetic-google-token-0123456789abcdef"
 WORKBOOK = "1RUiRPyU2DnoXe5Tbhd6BZXMCdJtxg7FP3UQwCd2i_e0"
 
+
 HEADER = ["Transaction ID", "Date", "Month", "Account", "Description", "Merchant", "Amount EUR",
           "Fee EUR", "Type", "Category", "Spending class", "Source references", "Review status",
           "Notes", "Balance EUR", "Include provisional totals", "Receipt group ID"]
@@ -19,6 +20,28 @@ HEADER = ["Transaction ID", "Date", "Month", "Account", "Description", "Merchant
 
 def serial(y, m, d):
     return (date(y, m, d) - SHEETS_EPOCH).days + 1
+
+SNAPSHOT_GRID = [
+    ["Date", "Item", "Type", "Amount EUR", "Subtotal"],
+    [serial(2026, 10, 31), "BOI current", "asset", 5200.50, "NO"],
+    [serial(2026, 10, 31), "DeGiro", "asset", 12000, "NO"],
+    [serial(2026, 10, 31), "Total assets", "asset", 17200.50, "YES"],
+    [serial(2026, 10, 31), "Mortgage", "liability", -180000, "NO"],
+    [serial(2026, 11, 30), "BOI current", "asset", 6100, "NO"],
+    [serial(2026, 11, 30), "Mortgage", "liability", -179000, "NO"],
+]
+
+
+def grid_for(ledger, snapshot):
+    def _fetch(workbook_id, range_name, token, **kwargs):
+        if "combined" in range_name:
+            if isinstance(ledger, Exception):
+                raise ledger
+            return ledger
+        if isinstance(snapshot, Exception):
+            raise snapshot
+        return snapshot
+    return _fetch
 
 
 GRID = [
@@ -43,7 +66,7 @@ class FinanceSyncApiTests(unittest.TestCase):
         self.encrypt.start()
         self.token = patch("services.finance_sync._load_token", return_value=TOKEN)
         self.token.start()
-        self.fetch = patch("services.google_sheets.fetch_values", return_value=GRID)
+        self.fetch = patch("services.google_sheets.fetch_values", side_effect=grid_for(GRID, SNAPSHOT_GRID))
         self.fetch_mock = self.fetch.start()
         self.client = app.test_client()
         self.headers = self.register("owner@example.com")
@@ -94,9 +117,19 @@ class FinanceSyncApiTests(unittest.TestCase):
         self.assertEqual(status["row_count"], 3)
         self.assertEqual(self.client.get("/api/finance/sync/status", headers=self.headers).headers["Cache-Control"], "no-store")
 
+    def test_snapshot_tab_is_stored_and_missing_tab_warns_but_succeeds(self):
+        sync = self.client.post("/api/finance/sync", headers=self.headers).get_json()["sync"]
+        snapshot = db_state.finance_snapshots_memory["owner@example.com"]
+        self.assertIsNotNone(snapshot["snapshot_grid"])
+        self.assertEqual(sync["row_count"], 3)
+        self.fetch_mock.side_effect = grid_for(GRID, google_sheets.SheetsError("workbook_not_found", 404))
+        sync = self.client.post("/api/finance/sync", headers=self.headers).get_json()["sync"]
+        self.assertIsNone(db_state.finance_snapshots_memory["owner@example.com"]["snapshot_grid"])
+        self.assertTrue(any("snapshot tab unavailable" in w for w in sync["warnings"]))
+
     def test_failed_sync_retains_last_good_snapshot_with_stale_flag(self):
         first = self.client.post("/api/finance/sync", headers=self.headers).get_json()["sync"]
-        self.fetch_mock.side_effect = google_sheets.SheetsError("sheets_unreachable", 502)
+        self.fetch_mock.side_effect = grid_for(google_sheets.SheetsError("sheets_unreachable", 502), SNAPSHOT_GRID)
         result = self.client.post("/api/finance/sync", headers=self.headers)
         self.assertEqual(result.status_code, 502)
         self.assertEqual(result.get_json()["details"]["code"], "sheets_unreachable")
@@ -105,8 +138,7 @@ class FinanceSyncApiTests(unittest.TestCase):
         self.assertEqual(status["snapshot_id"], first["snapshot_id"])
         self.assertEqual(status["error"], "sheets_unreachable")
         self.assertIsNotNone(status["last_attempt_at"])
-        self.fetch_mock.side_effect = None
-        self.fetch_mock.return_value = GRID
+        self.fetch_mock.side_effect = grid_for(GRID, SNAPSHOT_GRID)
         recovered = self.client.post("/api/finance/sync", headers=self.headers).get_json()["sync"]
         self.assertNotEqual(recovered["snapshot_id"], first["snapshot_id"])
         status = self.client.get("/api/finance/sync/status", headers=self.headers).get_json()["sync"]
@@ -115,16 +147,16 @@ class FinanceSyncApiTests(unittest.TestCase):
 
     def test_rejected_token_maps_to_reconnect_and_workbook_404(self):
         self.client.post("/api/finance/sync", headers=self.headers)
-        self.fetch_mock.side_effect = google_sheets.SheetsError("sheets_reconnect_required", 409)
+        self.fetch_mock.side_effect = grid_for(google_sheets.SheetsError("sheets_reconnect_required", 409), SNAPSHOT_GRID)
         result = self.client.post("/api/finance/sync", headers=self.headers)
         self.assertEqual(result.status_code, 409)
         self.assertIn("Replace it in Account", result.get_json()["error"])
-        self.fetch_mock.side_effect = google_sheets.SheetsError("workbook_not_found", 404)
+        self.fetch_mock.side_effect = grid_for(google_sheets.SheetsError("workbook_not_found", 404), SNAPSHOT_GRID)
         self.assertEqual(self.client.post("/api/finance/sync", headers=self.headers).status_code, 404)
 
     def test_validation_failure_rejects_sync_without_touching_snapshot(self):
         self.client.post("/api/finance/sync", headers=self.headers)
-        self.fetch_mock.return_value = [["Transaction ID", "Date"], ["T-1", 46000]]
+        self.fetch_mock.side_effect = grid_for([["Transaction ID", "Date"], ["T-1", 46000]], SNAPSHOT_GRID)
         result = self.client.post("/api/finance/sync", headers=self.headers)
         self.assertEqual(result.status_code, 422)
         self.assertIn("Missing required columns", result.get_json()["details"][0])

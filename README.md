@@ -43,6 +43,8 @@ Garmin diagnostics go to the existing Cloud Run application logs (stderr). Searc
 
 Read-only ledger sync: `POST /api/finance/sync` reads the account's workbook (`combined data` A:Q) with the stored read-only token, mapping columns by header name. Sheets native values are parsed explicitly (1900-system serial dates, native numerics); money is handled as `Decimal` and serialized as decimal strings with `currency: EUR`, timezone `Europe/Dublin`; unknown values stay null, never zero. Snapshots are derived, in-memory and per-account: one sync lock per account, atomic swap on success, and a failed or rejected sync retains the last good snapshot with `stale: true` (a 401/403 from Google maps to 409 `sheets_reconnect_required`). After a restart the status endpoint reports `sync_required` rather than empty data. The snapshot cache is never shared across instances or treated as durable; a private Cloud Storage snapshot is the follow-up if multi-instance stability is required. Janus never writes to the workbook.
 
+Read API: every endpoint reads one pinned snapshot (meta carries `snapshot_id` + `rule_set_version`; no mixed versions) and requires a prior successful sync (`409 sync_required` otherwise). Periods are whole calendar months in Europe/Dublin (`this_month` default, `last_month`, `last_3/6/12` including current, `ytd`, `all`, or custom `start`/`end`); missing months are reported as gaps, never zeros. Budget math sums signed Amount EUR for Income/Expense/Refund with inclusion YES, applies active rules deterministically (priority desc, rule_id asc; first match wins) with per-row reasons, excludes transfers/savings/Food Pot from budget cash flow, reports investment principal separately, never subtracts Fee EUR twice, counts receipt groups once, and enforces duplicate/failed/reverted exclusions in code regardless of rules. The sinking fund keeps a stateful recognised-balance ledger across all history; unknown opening recognition blocks unsupported exclusions and is flagged provisional. Money is Decimal, serialized as decimal strings in EUR.
+
 ## Retired flashcard functionality
 
 Minerva now uses Garmin Overview and Account. The former flashcard CRUD/due/review endpoints, `POST /api/minerva/respond`, and `GET/PUT /api/user/minerva-settings` are removed and return 404. Card drafting prompts, provider methods, scheduling, and operational card storage code are removed too.
@@ -62,6 +64,13 @@ Janus hosts each account's own finance rule set and (later) read-only access to 
 | `DELETE` | `/api/finance/connection` | Remove the stored token; saved rules and metadata are retained |
 | `POST` | `/api/finance/sync` | Pull `combined data` A:Q via Sheets API (UNFORMATTED_VALUE), validate, atomically publish an in-memory snapshot; failed sync keeps last good data with `stale` |
 | `GET` | `/api/finance/sync/status` | Last success/attempt, snapshot ID, rule-set version, stale flag, coverage (months, cutoff) and `sync_required` after restart |
+| `GET` | `/api/finance/transactions` | Filtered, paginated, bounded rows with per-row rule reason; `period` preset or `start`/`end` whole months |
+| `GET` | `/api/finance/summary` | Income/spending/refunds/net, separate transfers and investment, sheet-vs-rule-adjusted reconciliation bridge, gaps, provisional flag |
+| `GET` | `/api/finance/cashflow?by=month\|category` | Signed monthly net movements (red negative/green positive) or category steps |
+| `GET` | `/api/finance/categories`, `/merchants`, `/trends` | Server-side aggregates over a period |
+| `GET` | `/api/finance/net-worth` | Dated snapshot-tab balances; subtotals never double counted; explicit unavailable state when the tab is missing/unrecognized |
+| `GET` | `/api/finance/sinking-funds` | Stateful recognised-balance ledger; provisional until the opening balance is verified |
+| `GET` | `/api/finance/budgets` | Explicit `available: false` until verified budget data exists |
 | `GET` | `/api/finance/rules?include_deleted=&scope=&status=` | List rules and the current `rule_set_version` |
 | `POST` | `/api/finance/rules` | Create one validated rule (201) |
 | `PUT` | `/api/finance/rules/{rule_id}` | Version-checked update (`revision` required; 409 on mismatch) |
