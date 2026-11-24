@@ -51,10 +51,13 @@ Deploy the updated Minerva frontend before retiring the backend endpoints if old
 
 ## Finance rules (Minerva finance migration)
 
-Janus hosts the account-owned finance rule set used by Minerva's finance dashboard. Finance access is separate from the shared login: every `/api/finance/*` route requires a current bearer token for an account listed in the comma-separated `FINANCE_OWNER_EMAILS` environment variable and returns `403 forbidden` for everyone else (and while the variable is unset). All finance responses are `Cache-Control: no-store`. The external Google Sheet stays canonical; Janus never writes to it.
+Janus hosts each account's own finance rule set and (later) read-only access to that account's Google Sheets workbook, used by Minerva's finance dashboard. Finance access is separate from the shared login and uses the same per-account model as the AI provider keys: a valid bearer token alone is insufficient — the account must first store its own Google OAuth access token (read-only Sheets scope) via `PUT /api/finance/connection`. The token is KMS-encrypted with account/purpose-bound AAD under `users/{email}/private/finance`; only non-secret metadata (workbook ID, last four characters, timestamps) is ever returned. Until a connection exists, every other `/api/finance/*` route returns `403 finance_not_connected`. All finance responses are `Cache-Control: no-store`. The external Google Sheet stays canonical; Janus never writes to it.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/finance/connection` | Safe connection metadata (`connected`, `workbook_id`, `last_four`) |
+| `PUT` | `/api/finance/connection` | Validate and KMS-encrypt `{ "access_token": "...", "workbook_id": "..." }` |
+| `DELETE` | `/api/finance/connection` | Remove the stored token; saved rules and metadata are retained |
 | `GET` | `/api/finance/rules?include_deleted=&scope=&status=` | List rules and the current `rule_set_version` |
 | `POST` | `/api/finance/rules` | Create one validated rule (201) |
 | `PUT` | `/api/finance/rules/{rule_id}` | Version-checked update (`revision` required; 409 on mismatch) |

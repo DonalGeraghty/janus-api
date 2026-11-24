@@ -1,18 +1,30 @@
-"""Finance rules management: individual CRUD, CSV import/export and dry-run tests.
+"""Finance connection plus rules management: individual CRUD, CSV import/export, dry-run.
 
-Finance access requires a current Janus bearer token for an account listed in
-FINANCE_OWNER_EMAILS; a shared login alone is not enough. All responses are
-Cache-Control: no-store and never mix snapshot/rule-set versions.
+A shared Janus login alone is not finance access: every /api/finance route except
+the connection endpoints requires the account to have its own KMS-encrypted Google
+Sheets credential stored (PUT /api/finance/connection), the same per-account model
+as the AI provider keys. All responses are Cache-Control: no-store.
 """
 
-from functools import wraps
+import re
 
 from flask import Blueprint, Response, g, jsonify, request
 from pydantic import ValidationError
 
-from core.finance_access import finance_authorized
 from core.finance_rules import RuleInput, RuleUpdate
 from core.request_auth import authenticated_identity
+from services.credential_service import (
+    CredentialConfigurationError,
+    CredentialEncryptionError,
+    encrypt_api_key,
+)
+from services.firebase.finance_connection import (
+    FinanceConnectionError,
+    delete_finance_connection,
+    get_finance_connection_status,
+    has_finance_connection,
+    save_finance_connection,
+)
 from services.firebase.finance_rules import (
     FinanceError,
     create_rule,
@@ -30,6 +42,7 @@ from services.firebase.finance_rules import (
 blueprint = Blueprint("finance", __name__, url_prefix="/api/finance")
 
 MAX_BODY_BYTES = 256 * 1024
+WORKBOOK_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{10,128}$")
 
 
 @blueprint.before_request
@@ -40,10 +53,13 @@ def require_finance_account():
     identity = authenticated_identity()
     if not identity:
         return jsonify(status="error", error="unauthorized", message="Sign in to continue."), 401
-    if not finance_authorized(identity):
-        return jsonify(status="error", error="forbidden",
-                       message="Finance access is not enabled for this account."), 403
     g.finance_identity = identity
+    if request.path == "/api/finance/connection":
+        return None
+    if not has_finance_connection(identity["email"], identity["account_id"]):
+        return jsonify(status="error", error="finance_not_connected",
+                       message="Connect your own Google Sheets workbook first (Account, Finance connection)."), 403
+    return None
 
 
 @blueprint.after_request
@@ -64,6 +80,45 @@ def finance_error(error):
 def invalid_rule(error):
     return jsonify(status="error", error="Invalid rule data",
                    message="; ".join(str(item) for item in error.errors()[:3])), 400
+
+
+@blueprint.errorhandler(FinanceConnectionError)
+def connection_error(error):
+    return jsonify(status="error", error=str(error)), error.status
+
+
+@blueprint.get("/connection")
+def connection_status():
+    identity = g.finance_identity
+    return jsonify(status="success", connection=get_finance_connection_status(identity["email"], identity["account_id"]))
+
+
+@blueprint.put("/connection")
+def connection_save():
+    identity = g.finance_identity
+    data = request.get_json(silent=True) or {}
+    token = data.get("access_token")
+    workbook_id = data.get("workbook_id")
+    if not isinstance(token, str) or not token.strip() or len(token) < 20 or len(token) > 2048 or any(c.isspace() for c in token):
+        return jsonify(status="error", error="invalid_access_token",
+                       message="Supply a Google OAuth access token (no spaces, 20-2048 characters)."), 400
+    if not isinstance(workbook_id, str) or not WORKBOOK_ID_PATTERN.fullmatch(workbook_id.strip()):
+        return jsonify(status="error", error="invalid_workbook_id",
+                       message="Supply the Google Sheets workbook ID of your finance workbook."), 400
+    email = identity["email"]
+    try:
+        ciphertext = encrypt_api_key(token.strip(), email, provider="google", aad_version=2)
+    except (CredentialConfigurationError, CredentialEncryptionError):
+        return jsonify(status="error", error="credential_service_unavailable",
+                       message="Secure credential storage is unavailable."), 503
+    status = save_finance_connection(email, identity["account_id"], ciphertext, token.strip()[-4:], workbook_id.strip())
+    return jsonify(status="success", connection=status)
+
+
+@blueprint.delete("/connection")
+def connection_delete():
+    identity = g.finance_identity
+    return jsonify(status="success", connection=delete_finance_connection(identity["email"], identity["account_id"]))
 
 
 def payload(model, partial=False):

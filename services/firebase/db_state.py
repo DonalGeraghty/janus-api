@@ -22,4 +22,5 @@ push_subscriptions_memory = {}
 finance_rules_memory = {}
 finance_rule_history_memory = {}
 finance_settings_memory = {}
+finance_connection_memory = {}
 memory_lock = RLock()

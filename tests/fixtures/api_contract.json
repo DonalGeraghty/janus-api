@@ -31,6 +31,24 @@
       ]
     },
     {
+      "path": "/api/finance/connection",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/api/finance/connection",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/connection",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
       "path": "/api/finance/rules",
       "methods": [
         "GET"
@@ -344,6 +362,7 @@
       "delete_push_subscription": "DELETE /api/user/push-subscriptions",
       "disconnect_garmin": "DELETE /api/garmin/connection",
       "draft_habits": "POST /api/habits/draft",
+      "finance_connection": "GET/PUT/DELETE /api/finance/connection",
       "finance_rules": "GET/POST /api/finance/rules; PUT/DELETE /api/finance/rules/{rule_id}",
       "finance_rules_export": "GET /api/finance/rules/export?format=csv|json",
       "finance_rules_history": "GET /api/finance/rules/history; POST /api/finance/rules/restore/{version}",
