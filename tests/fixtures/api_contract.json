@@ -31,6 +31,60 @@
       ]
     },
     {
+      "path": "/api/finance/rules",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/rules",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/finance/rules/<rule_id>",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/api/finance/rules/<rule_id>",
+      "methods": [
+        "PUT"
+      ]
+    },
+    {
+      "path": "/api/finance/rules/export",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/rules/history",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/rules/import",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/finance/rules/restore/<version>",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/api/finance/rules/test",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
       "path": "/api/garmin/activities/<int:activity_id>",
       "methods": [
         "GET",
@@ -290,10 +344,21 @@
       "delete_push_subscription": "DELETE /api/user/push-subscriptions",
       "disconnect_garmin": "DELETE /api/garmin/connection",
       "draft_habits": "POST /api/habits/draft",
+      "finance_rules": "GET/POST /api/finance/rules; PUT/DELETE /api/finance/rules/{rule_id}",
+      "finance_rules_export": "GET /api/finance/rules/export?format=csv|json",
+      "finance_rules_history": "GET /api/finance/rules/history; POST /api/finance/rules/restore/{version}",
+      "finance_rules_import": "POST /api/finance/rules/import (preview or commit)",
+      "finance_rules_test": "POST /api/finance/rules/test",
       "get_ai_credential_status": "GET /api/user/ai-credentials/{provider}",
       "get_ai_settings": "GET /api/user/ai-settings",
+      "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5",
+      "get_garmin_activity": "GET /api/garmin/activities/{activity_id}",
       "get_garmin_connection": "GET /api/garmin/connection",
+      "get_garmin_health": "GET /api/garmin/data/{resource}?start=YYYY-MM-DD&end=YYYY-MM-DD",
+      "get_garmin_preferences": "GET /api/garmin/preferences",
+      "get_garmin_sleep": "GET /api/garmin/data/sleep?date=YYYY-MM-DD",
       "get_garmin_steps": "GET /api/garmin/data/steps?start=YYYY-MM-DD&end=YYYY-MM-DD",
+      "get_garmin_workouts": "GET /api/garmin/activities/{activity_id}/workouts",
       "get_openai_key_status": "GET /api/user/openai-key",
       "get_push_settings": "GET /api/user/push-settings",
       "habit": "PUT/DELETE /api/habits/{habit_id}",
@@ -310,16 +375,10 @@
       "set_ai_credential": "PUT /api/user/ai-credentials/{provider}",
       "set_ai_settings": "PUT /api/user/ai-settings",
       "set_garmin_connection": "PUT /api/garmin/connection",
+      "set_garmin_preferences": "PUT /api/garmin/preferences",
       "set_openai_key": "PUT /api/user/openai-key",
       "set_push_settings": "PUT /api/user/push-settings",
-      "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}",
-      "get_garmin_sleep": "GET /api/garmin/data/sleep?date=YYYY-MM-DD",
-      "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5",
-      "get_garmin_health": "GET /api/garmin/data/{resource}?start=YYYY-MM-DD&end=YYYY-MM-DD",
-      "get_garmin_preferences": "GET /api/garmin/preferences",
-      "set_garmin_preferences": "PUT /api/garmin/preferences",
-      "get_garmin_activity": "GET /api/garmin/activities/{activity_id}",
-      "get_garmin_workouts": "GET /api/garmin/activities/{activity_id}/workouts"
+      "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}"
     },
     "service": "Janus API"
   }

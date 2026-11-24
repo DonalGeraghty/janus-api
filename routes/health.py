@@ -58,6 +58,11 @@ def root():
             "habit_labels": "POST /api/habit-categories|habit-groups; PUT/DELETE /api/habit-categories|habit-groups/{id}",
             "habit_settings": "PUT /api/habits/settings",
             "draft_habits": "POST /api/habits/draft",
+            "finance_rules": "GET/POST /api/finance/rules; PUT/DELETE /api/finance/rules/{rule_id}",
+            "finance_rules_import": "POST /api/finance/rules/import (preview or commit)",
+            "finance_rules_export": "GET /api/finance/rules/export?format=csv|json",
+            "finance_rules_test": "POST /api/finance/rules/test",
+            "finance_rules_history": "GET /api/finance/rules/history; POST /api/finance/rules/restore/{version}",
             "health": "GET /health",
         },
     )

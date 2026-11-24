@@ -49,6 +49,26 @@ Existing stored flashcards and review history are not migrated or erased by this
 
 Deploy the updated Minerva frontend before retiring the backend endpoints if older browser clients still need the study interface.
 
+## Finance rules (Minerva finance migration)
+
+Janus hosts the account-owned finance rule set used by Minerva's finance dashboard. Finance access is separate from the shared login: every `/api/finance/*` route requires a current bearer token for an account listed in the comma-separated `FINANCE_OWNER_EMAILS` environment variable and returns `403 forbidden` for everyone else (and while the variable is unset). All finance responses are `Cache-Control: no-store`. The external Google Sheet stays canonical; Janus never writes to it.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/finance/rules?include_deleted=&scope=&status=` | List rules and the current `rule_set_version` |
+| `POST` | `/api/finance/rules` | Create one validated rule (201) |
+| `PUT` | `/api/finance/rules/{rule_id}` | Version-checked update (`revision` required; 409 on mismatch) |
+| `DELETE` | `/api/finance/rules/{rule_id}?revision=` | Soft delete (kept in history, hidden from default listing) |
+| `POST` | `/api/finance/rules/import` | `{ "csv": "...", "mode": "preview" \| "commit" }`; preview validates and lists create/update/unchanged, held and conflicting rows; commit applies atomically in one transaction and bumps the rule-set version once. Missing rows are never implicitly replaced |
+| `GET` | `/api/finance/rules/export?format=csv\|json` | CSV download (formula-injection escaped) or lossless JSON |
+| `POST` | `/api/finance/rules/test` | Dry-run active rules against up to 100 sample rows; no mutations |
+| `GET` | `/api/finance/rules/history` | Rule-set versions with actor, summary and changed IDs |
+| `POST` | `/api/finance/rules/restore/{version}` | Restore a previous rule-set version |
+
+Rules are data, never code. Fields, operators and actions are validated against fixed allowlists (`core/finance_rules.py`); an unknown action can never activate and is held with status `review`. Conflicting active assignments (same condition and priority, different outcomes) are reported and the incoming rows are held for review. Priority order is deterministic: higher `priority` first, then `rule_id`. CSV columns are `rule_id,scope,name,type,field,operator,value,action,action_value,priority,status,source_section,description`; `scope` is `janus` (executable/reporting) or `chatgpt_workflow` (reference only). Request bodies are capped at 256 KiB.
+
+Storage lives under `users/{email}` in Firestore: `finance_rules/{rule_id}`, `finance_rule_history/{version}` (full snapshot per version) and `finance_settings/settings` (holds `rule_set_version`). Every mutation is one transaction that reads first, guards the account generation and deletion tombstone, and writes rules, settings and history together. The local in-memory fallback follows the same rules, and guarded account deletion removes all three collections without touching the external Sheet. Run the finance tests with `python -m unittest discover -s tests -p test_finance_rules_api.py`.
+
 ## Responsibilities
 
 - Register users and issue seven-day JWT access tokens

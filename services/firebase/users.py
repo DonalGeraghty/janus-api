@@ -25,6 +25,7 @@ from .garmin import delete_garmin_account_data
 from .push import delete_push_data
 from .workouts import delete_workout_entries
 from .habits import delete_habit_data
+from .finance_rules import delete_finance_account_data
 from ..logging_service import logger
 
 
@@ -412,6 +413,9 @@ def _clear_user_memory(email_key):
         db_state.flashcards_memory.pop(email_key, None)
         db_state.flashcard_reviews_memory.pop(email_key, None)
         db_state.push_subscriptions_memory.pop(email_key, None)
+        db_state.finance_rules_memory.pop(email_key, None)
+        db_state.finance_rule_history_memory.pop(email_key, None)
+        db_state.finance_settings_memory.pop(email_key, None)
 
 
 def _mark_memory_account_deleting(
@@ -513,6 +517,9 @@ def delete_user_account(email, expected_account_id):
         return False, "delete_failed"
 
     if not delete_habit_data(email_key, expected_account_id, deletion_token):
+        return False, "delete_failed"
+
+    if not delete_finance_account_data(email_key, expected_account_id, deletion_token):
         return False, "delete_failed"
 
     if not delete_flashcards(
