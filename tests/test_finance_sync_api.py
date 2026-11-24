@@ -132,7 +132,7 @@ class FinanceSyncApiTests(unittest.TestCase):
         self.fetch_mock.side_effect = grid_for(google_sheets.SheetsError("sheets_unreachable", 502), SNAPSHOT_GRID)
         result = self.client.post("/api/finance/sync", headers=self.headers)
         self.assertEqual(result.status_code, 502)
-        self.assertEqual(result.get_json()["details"]["code"], "sheets_unreachable")
+        self.assertEqual(result.get_json()["error"], "sheets_unreachable")
         status = self.client.get("/api/finance/sync/status", headers=self.headers).get_json()["sync"]
         self.assertTrue(status["stale"])
         self.assertEqual(status["snapshot_id"], first["snapshot_id"])
@@ -150,7 +150,8 @@ class FinanceSyncApiTests(unittest.TestCase):
         self.fetch_mock.side_effect = grid_for(google_sheets.SheetsError("sheets_reconnect_required", 409), SNAPSHOT_GRID)
         result = self.client.post("/api/finance/sync", headers=self.headers)
         self.assertEqual(result.status_code, 409)
-        self.assertIn("Replace it in Account", result.get_json()["error"])
+        self.assertEqual(result.get_json()["error"], "sheets_reconnect_required")
+        self.assertIn("Replace it in Account", result.get_json()["message"])
         self.fetch_mock.side_effect = grid_for(google_sheets.SheetsError("workbook_not_found", 404), SNAPSHOT_GRID)
         self.assertEqual(self.client.post("/api/finance/sync", headers=self.headers).status_code, 404)
 

@@ -285,3 +285,20 @@ def recommend_meals(context, email, api_key, model=None):
         ),
     })
     return result
+
+
+def finance_chat(system, messages, email, api_key, model=None):
+    try:
+        with Anthropic(api_key=api_key, max_retries=GENERATION_MAX_RETRIES, timeout=GENERATION_TIMEOUT_SECONDS) as client:
+            response = client.messages.create(
+                model=_model_name(model),
+                max_tokens=4000,
+                system=system,
+                messages=list(messages),
+            )
+        text = "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
+        if not text.strip():
+            raise AnthropicServiceError("Anthropic returned no answer")
+        return text.strip()
+    except (AnthropicError, ValidationError, json.JSONDecodeError, TypeError) as error:
+        _raise_mapped_anthropic_error(error)

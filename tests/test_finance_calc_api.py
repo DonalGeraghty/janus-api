@@ -210,7 +210,8 @@ class FinanceReadApiTests(unittest.TestCase):
         self.client.put("/api/finance/connection", headers=fresh, json={"access_token": TOKEN, "workbook_id": WORKBOOK})
         result = self.client.get("/api/finance/summary", headers=fresh)
         self.assertEqual(result.status_code, 409, result.get_json())
-        self.assertEqual(result.get_json()["details"]["code"], "sync_required")
+        self.assertEqual(result.get_json()["error"], "sync_required")
+        self.assertIn("Sync the ledger first", result.get_json()["message"])
 
     def test_transactions_filter_paginate_and_pin_versions(self):
         result = self.client.get("/api/finance/transactions?period=all&limit=2", headers=self.headers)
