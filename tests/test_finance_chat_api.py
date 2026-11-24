@@ -19,7 +19,7 @@ HEADER = ["Transaction ID", "Date", "Month", "Account", "Description", "Merchant
 
 
 def serial(y, m, d):
-    return (date(y, m, d) - SHEETS_EPOCH).days + 1
+    return (date(y, m, d) - SHEETS_EPOCH).days
 
 
 GRID = [

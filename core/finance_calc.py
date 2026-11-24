@@ -110,10 +110,14 @@ def apply_rules(rules, row):
 def derive_rows(rules, rows):
     """Attach a derived interpretation to each row. Source fields are never rewritten."""
     derived = []
-    for row in rows:
+    for original in rows:
+        row = classify_event(original)
         outcome = apply_rules(rules, row)
         excluded = outcome is not None and outcome["action"] == "exclude"
-        if row.get("include_provisional_totals") == "NO":
+        # Generic transfer rules must not suppress an explicitly identified contribution or release.
+        if excluded and outcome.get("field") == "type" and row.get("type") == "Transfer" and row.get("event_type") in ("sinking_contribution_outgoing", "sinking_release"):
+            excluded = False
+        if row.get("include_provisional_totals") != "YES":
             excluded = True
         base_type = row.get("type")
         if outcome is not None and outcome["action"] == "classify":
@@ -128,12 +132,13 @@ def derive_rows(rules, rows):
                 "action": outcome["action"] if outcome else None,
                 "action_value": outcome["action_value"] if outcome else "",
                 "excluded": excluded,
+                "exclusion_reason": ("sheet_inclusion_not_yes" if row.get("include_provisional_totals") != "YES" else "rule_exclusion") if excluded else None,
                 "review": outcome is not None and outcome["action"] == "flag",
                 "type": base_type,
                 "category": category,
             },
         })
-    return derived
+    return canonicalize(derived)
 
 
 def _receipt_groups(rows):
@@ -142,7 +147,7 @@ def _receipt_groups(rows):
     groups = {}
     for row in rows:
         group = row.get("receipt_group_id")
-        if group:
+        if group and not row["derived"]["excluded"]:
             groups.setdefault(group, []).append(row)
     duplicates = set()
     conflicts = []
@@ -152,7 +157,7 @@ def _receipt_groups(rows):
         total = sum(_dec(r.get("amount_eur")) for r in members)
         for candidate in members:
             others = sum(_dec(r.get("amount_eur")) for r in members if r is not candidate)
-            if len(members) > 1 and _dec(candidate.get("amount_eur")) == others:
+            if candidate.get("review_status") != "Allocation" and all(r.get("review_status") == "Allocation" for r in members if r is not candidate) and _dec(candidate.get("amount_eur")) == others:
                 duplicates.update(id(r) for r in members if r is not candidate)
                 conflicts.append(f"receipt group {group}: full receipt counted once; {len(members) - 1} allocation row(s) not double counted")
                 break
@@ -169,11 +174,11 @@ def _sinking_walk(rows):
     sinking_events = {"sinking_contribution_outgoing", "sinking_contribution_receiving",
                       "sinking_payment_transfer", "covered_sinking_bill", "sinking_release"}
     events = sorted(
-        (r for r in rows if r.get("event_type") in sinking_events),
+        (r for r in rows if r.get("event_type") in sinking_events and not r.get("derived", {}).get("excluded") and r.get("event_type") not in ALWAYS_EXCLUDED_EVENTS),
         key=lambda r: (r.get("month") or "", r.get("date") or "", r.get("row") or 0),
     )
     balance = Decimal("0")
-    opening_verified = any(r.get("recognition_status") == "verified" for r in rows)
+    opening_verified = False  # No verified opening-balance field in the production ledger.
     covered_by_row = {}
     months = {}
     for row in events:
@@ -182,19 +187,20 @@ def _sinking_walk(rows):
         amount = _dec(row.get("amount_eur"))
         entry = months.setdefault(month, {"contributions": Decimal("0"), "covered": Decimal("0"),
                                           "released": Decimal("0"), "bills": Decimal("0")})
-        if event == "sinking_contribution_outgoing" and row.get("fund_purpose") in SINKING_PURPOSES:
+        if event == "sinking_contribution_outgoing" and row.get("fund_purpose") in SINKING_PURPOSES | {"shared_sinking_fund"} and amount < 0:
             contribution = abs(amount)
             entry["contributions"] += contribution
             balance += contribution
-        elif event == "covered_sinking_bill":
+        elif event == "covered_sinking_bill" and row.get("fund_purpose") in SINKING_PURPOSES and amount < 0:
             bill = abs(amount)
             covered = min(bill, balance)
             covered_by_row[id(row)] = covered
             entry["bills"] += bill
             entry["covered"] += covered
             balance -= covered
-        elif event == "sinking_release":
+        elif event == "sinking_release" and amount > 0:
             reversal = min(abs(amount), balance)
+            covered_by_row[id(row)] = reversal
             entry["released"] += reversal
             balance -= reversal
     return covered_by_row, balance, months, opening_verified
@@ -216,151 +222,166 @@ def sinking_ledger(rows):
     }
 
 
-def budget_view(derived_rows, start, end):
-    """Sheet baseline vs rule-adjusted budget totals over whole months."""
+def classify_event(original):
+    """Recognise explicit ledger evidence; ambiguous funding never assumes coverage."""
+    row = dict(original)
+    if row.get("event_type"):
+        return row
+    text = " ".join(str(row.get(k) or "") for k in ("description", "merchant", "category", "notes", "source_references")).lower()
+    status = str(row.get("review_status") or "").lower()
+    amount = _dec(row.get("amount_eur"))
+    kind = row.get("type")
+    event = None
+    purpose = None
+    if status == "confirmed duplicate" or (status == "resolved duplicate" and row.get("include_provisional_totals") != "YES"):
+        event = "confirmed_duplicate"
+    elif status in ("reverted", "failed"):
+        event = status
+    elif "sinking fund" in text:
+        if "release" in text and amount > 0 and kind in ("Transfer", "Refund"):
+            event = "sinking_release"
+        elif ("management fee" in text or "local property tax" in text or re.search(r"\blpt\b", text)) and kind == "Expense" and ("paid from sinking fund" in text or "funded by sinking fund" in text or "funded from sinking fund" in text) and "unfunded" not in text:
+            event = "covered_sinking_bill"
+            purpose = "apartment_management_fee" if "management fee" in text else "local_property_tax"
+        elif kind in ("Transfer", "Expense") and ("contribution" in text or "allocation" in text or "transfer to sinking fund" in text or row.get("category") == "Sinking Fund" and kind == "Expense"):
+            event = "sinking_contribution_outgoing" if amount < 0 else "sinking_contribution_receiving"
+            purpose = "shared_sinking_fund"
+        elif kind == "Transfer":
+            event = "sinking_payment_transfer"
+    elif kind == "Transfer":
+        event = "investment_principal_transfer" if "degiro" in text or "dejiro" in text else "internal_transfer"
+    if event:
+        row["event_type"] = event
+    if purpose:
+        row["fund_purpose"] = purpose
+    return row
+
+
+def canonicalize(rows):
+    """Compute a single effective budget amount for all downstream consumers."""
+    # Conflicting eligible IDs are not resolved by arbitrary sheet order.
+    ids = {}
+    for row in rows:
+        if row.get("transaction_id") and not row["derived"]["excluded"]:
+            ids.setdefault(row["transaction_id"], []).append(row)
+    seen = set()
+    for row in rows:
+        d = row["derived"]
+        tid = row.get("transaction_id")
+        if tid and len(ids.get(tid, [])) > 1:
+            signatures = {tuple(r.get(k) for k in ("date", "month", "amount_eur", "type", "account", "description", "category")) for r in ids[tid]}
+            if len(signatures) > 1:
+                d.update(excluded=True, review=True, exclusion_reason="conflicting_transaction_id")
+        if tid and tid in seen:
+            d.update(excluded=True, review=True, exclusion_reason="duplicate_transaction_id")
+        if row.get("event_type") in ALWAYS_EXCLUDED_EVENTS or row.get("amount_eur") is None or not row.get("date") or not row.get("month") or not tid:
+            d.update(excluded=True, review=True, exclusion_reason="invalid_or_excluded_event")
+        if tid and not d["excluded"]:
+            seen.add(tid)
+    duplicates, conflicts = _receipt_groups(rows)
+    for row in rows:
+        if id(row) in duplicates:
+            row["derived"].update(excluded=True, exclusion_reason="receipt_allocation_duplicate")
+    covered, _, _, _ = _sinking_walk(rows)
+    for row in rows:
+        d = row["derived"]
+        event = row.get("event_type")
+        amount = _dec(row.get("amount_eur"))
+        effective = Decimal("0")
+        investment = transfer = Decimal("0")
+        if not d["excluded"]:
+            if event in TRANSFER_EVENTS:
+                d["type"] = "Transfer"
+                transfer = amount
+            elif event in INVESTMENT_EVENTS:
+                d["type"] = "Transfer"
+                investment = amount
+            elif event == "sinking_contribution_outgoing" and row.get("fund_purpose") in SINKING_PURPOSES | {"shared_sinking_fund"} and amount < 0:
+                d.update(type="Expense", category="Sinking Fund")
+                effective = amount
+            elif event == "covered_sinking_bill":
+                d["type"] = "Expense"
+                effective = amount + covered.get(id(row), Decimal("0"))
+            elif event == "sinking_release":
+                d.update(type="Expense", category="Sinking Fund")
+                effective = covered.get(id(row), Decimal("0"))
+            elif d["type"] in BUDGET_TYPES:
+                effective = amount
+        d.update(effective_budget_amount_eur=_money(effective), investment_amount_eur=_money(investment),
+                 transfer_amount_eur=_money(transfer))
+    return rows
+
+
+def _scope(rows, start, end):
     months = None if start is None else set(month_list(start, end))
-    in_scope = [r for r in derived_rows if months is None or r.get("month") in months]
-    ledger = sinking_ledger(derived_rows)
-    covered_by_row, _balance, _months, _verified = _sinking_walk(derived_rows)
+    return [r for r in rows if months is None or r.get("month") in months]
 
-    duplicates, receipt_conflicts = _receipt_groups(in_scope)
 
-    def totals(rows, use_rules):
-        income = spending = refunds = transfers = investment = Decimal("0")
-        count = 0
-        for row in rows:
-            amount = _dec(row.get("amount_eur"))
-            if amount == 0 and row.get("amount_eur") is None:
+def _totals(rows, adjusted=True):
+    totals = dict.fromkeys(("income", "spending", "refunds", "transfers", "investment"), Decimal("0"))
+    count = 0
+    for row in rows:
+        d = row["derived"]
+        if adjusted:
+            totals["transfers"] += _dec(d["transfer_amount_eur"])
+            totals["investment"] += _dec(d["investment_amount_eur"])
+            if d["excluded"]:
                 continue
-            derived = row.get("derived", {})
-            if use_rules and derived.get("excluded"):
+            amount, kind = _dec(d["effective_budget_amount_eur"]), d["type"]
+        else:
+            if row.get("include_provisional_totals") != "YES" or row.get("amount_eur") is None:
                 continue
-            if not use_rules and row.get("include_provisional_totals") == "NO":
-                continue
-            if id(row) in duplicates:
-                continue
-            event = row.get("event_type")
-            if use_rules and event in ALWAYS_EXCLUDED_EVENTS:
-                continue
-            if use_rules and event in TRANSFER_EVENTS:
-                transfers += amount
-                continue
-            if use_rules and event in INVESTMENT_EVENTS:
-                investment += amount
-                continue
-            if use_rules and event == "sinking_contribution_outgoing" and row.get("fund_purpose") in SINKING_PURPOSES:
-                spending += amount
-                count += 1
-                continue
-            type_eff = derived.get("type") if use_rules else row.get("type")
-            if event == "covered_sinking_bill" and use_rules:
-                spending += -(abs(amount) - covered_by_row.get(id(row), Decimal("0")))
-                count += 1
-                continue
-            if type_eff == "Income":
-                income += amount
-            elif type_eff == "Expense":
-                spending += amount
-            elif type_eff == "Refund":
-                refunds += amount
-            else:
-                continue
+            amount, kind = _dec(row["amount_eur"]), row.get("type")
+        key = {"Income": "income", "Expense": "spending", "Refund": "refunds"}.get(kind)
+        if key:
+            totals[key] += amount
             count += 1
-        return {"income": income, "spending": spending, "refunds": refunds,
-                "transfers": transfers, "investment": investment, "rows": count}
+    totals["net"] = totals["income"] + totals["spending"] + totals["refunds"]
+    return {k: _money(v) for k,v in totals.items()} | {"rows": count}
 
-    sheet = totals(in_scope, use_rules=False)
-    adjusted = totals(in_scope, use_rules=True)
 
-    def signed(t):
-        return {"income": _money(t["income"]), "spending": _money(t["spending"]),
-                "refunds": _money(t["refunds"]), "net": _money(t["income"] + t["spending"] + t["refunds"]),
-                "transfers": _money(t["transfers"]), "investment": _money(t["investment"]),
-                "rows": t["rows"]}
+def budget_view(derived_rows, start, end):
+    scope = _scope(derived_rows, start, end)
+    sheet, adjusted = _totals(scope, False), _totals(scope)
+    months = sorted({r["month"] for r in derived_rows if r.get("month")})
+    _, conflicts = _receipt_groups(scope)
+    return {"period": {"start": start, "end": end}, "sheet_totals": sheet, "adjusted_totals": adjusted,
+            "reconciliation_bridge": {k: _money(_dec(adjusted[k]) - _dec(sheet[k])) for k in ("income", "spending", "refunds", "net")},
+            "receipt_conflicts": conflicts, "gaps": [m for m in month_list(start, end) or [] if m not in months],
+            "available_months": months, "provisional": sinking_ledger(derived_rows)["provisional"], "currency": "EUR"}
 
-    sheet_signed, adj_signed = signed(sheet), signed(adjusted)
-    bridge = {key: _money(Decimal(adj_signed[key]) - Decimal(sheet_signed[key]))
-              for key in ("income", "spending", "refunds", "net")}
-    available_months = sorted({r.get("month") for r in derived_rows if r.get("month")})
-    gaps = [m for m in (month_list(start, end) or []) if m not in available_months]
-    return {
-        "period": {"start": start, "end": end},
-        "sheet_totals": sheet_signed,
-        "adjusted_totals": adj_signed,
-        "reconciliation_bridge": bridge,
-        "receipt_conflicts": receipt_conflicts,
-        "gaps": gaps,
-        "available_months": available_months,
-        "provisional": ledger["provisional"],
-        "currency": "EUR",
-    }
+
+def _budget_rows(rows, start, end):
+    return [r for r in _scope(rows, start, end) if not r["derived"]["excluded"] and r["derived"]["type"] in BUDGET_TYPES]
 
 
 def cashflow(derived_rows, start, end, by="month"):
-    months = month_list(start, end)
-    scope = [r for r in derived_rows if months is None or r.get("month") in months]
-    scope = [r for r in scope if not r.get("derived", {}).get("excluded")
-             and r.get("include_provisional_totals") != "NO"]
-    scope = [r for r in scope if r.get("derived", {}).get("type") in BUDGET_TYPES
-             or r.get("event_type") == "covered_sinking_bill"]
-    if by == "category":
-        steps = {}
-        for row in scope:
-            month = row.get("month") or "unknown"
-            category = row.get("derived", {}).get("category") or "Uncategorised"
-            amount = _dec(row.get("amount_eur"))
-            if row.get("event_type") == "covered_sinking_bill":
-                continue
-            entry = steps.setdefault(month, {}).setdefault(category, Decimal("0"))
-            steps[month][category] = entry + amount
-        return [{"month": m, "categories": {c: _money(v) for c, v in sorted(cats.items())}}
-                for m, cats in sorted(steps.items())]
-    monthly = {}
-    for row in scope:
-        month = row.get("month") or "unknown"
-        amount = _dec(row.get("amount_eur"))
-        monthly[month] = monthly.get(month, Decimal("0")) + amount
-    return [{"month": m, "net": _money(v)} for m, v in sorted(monthly.items())]
+    if by == "month":
+        return [{"month": r["month"], "net": r["net"]} for r in trends(derived_rows, start, end)]
+    groups = {}
+    for row in _budget_rows(derived_rows, start, end):
+        d = row["derived"]
+        group = groups.setdefault(row.get("month") or "unknown", {})
+        key = d.get("category") or "Uncategorised"
+        group[key] = group.get(key, Decimal("0")) + _dec(d["effective_budget_amount_eur"])
+    return [{"month": m, "categories": {k: _money(v) for k,v in sorted(g.items())}} for m,g in sorted(groups.items())]
 
 
 def aggregates(derived_rows, start, end, field):
-    months = month_list(start, end)
-    scope = [r for r in derived_rows if (months is None or r.get("month") in months)
-             and not r.get("derived", {}).get("excluded")
-             and r.get("include_provisional_totals") != "NO"
-             and r.get("derived", {}).get("type") in ("Expense", "Refund", "Income")]
     totals = {}
-    for row in scope:
-        key = row.get(field) or "Unknown"
-        totals[key] = totals.get(key, Decimal("0")) + _dec(row.get("amount_eur"))
-    return [{"name": k, "total": _money(v), "count": sum(1 for r in scope if (r.get(field) or "Unknown") == k)}
-            for k, v in sorted(totals.items(), key=lambda item: item[1])]
+    for row in _budget_rows(derived_rows, start, end):
+        d = row["derived"]
+        key = (d.get(field) if field == "category" else row.get(field)) or "Unknown"
+        amount, count = totals.get(key, (Decimal("0"), 0))
+        totals[key] = (amount + _dec(d["effective_budget_amount_eur"]), count + 1)
+    return [{"name": k, "total": _money(v), "count": n} for k,(v,n) in sorted(totals.items(), key=lambda item: item[1][0])]
 
 
 def trends(derived_rows, start, end):
-    months = month_list(start, end)
-    scope = [r for r in derived_rows if (months is None or r.get("month") in months)
-             and not r.get("derived", {}).get("excluded")
-             and r.get("include_provisional_totals") != "NO"
-             and r.get("derived", {}).get("type") in BUDGET_TYPES]
-    per_month = {}
-    for row in scope:
-        month = row.get("month") or "unknown"
-        amount = _dec(row.get("amount_eur"))
-        type_eff = row["derived"]["type"]
-        entry = per_month.setdefault(month, {"income": Decimal("0"), "spending": Decimal("0"), "refunds": Decimal("0")})
-        if type_eff == "Income":
-            entry["income"] += amount
-        elif type_eff == "Expense":
-            entry["spending"] += amount
-        elif type_eff == "Refund":
-            entry["refunds"] += amount
-    result = []
-    for month in sorted(per_month):
-        entry = per_month[month]
-        result.append({"month": month, "income": _money(entry["income"]), "spending": _money(entry["spending"]),
-                       "refunds": _money(entry["refunds"]), "net": _money(entry["income"] + entry["spending"] + entry["refunds"])})
-    return result
+    groups = {}
+    for row in _budget_rows(derived_rows, start, end):
+        groups.setdefault(row.get("month") or "unknown", []).append(row)
+    return [{"month": m, **{k: v for k,v in _totals(rows).items() if k in ("income","spending","refunds","net")}} for m,rows in sorted(groups.items())]
 
 
 def parse_net_worth(snapshot_grid):
@@ -374,6 +395,48 @@ def parse_net_worth(snapshot_grid):
             if name in header:
                 return header.index(name)
         return None
+    # The production snapshot has one row per date and holdings in columns.
+    asset_names = ("supersaver", "boi goalsaver", "boi current account", "revolut", "monzo",
+                   "pension mercer workday", "pension efx new ireland", "pension sie zurich",
+                   "dejiro", "apartment value")
+    if "mortgage (owed)" in header and "date" in header:
+        from .finance_sheets import parse_date, parse_money
+        history, warnings = [], []
+        seen_dates = set()
+        for index, row in enumerate(snapshot_grid[1:], 2):
+            cells = list(row) + [None] * max(0, len(header) - len(row))
+            day = parse_date(cells[header.index("date")])
+            if not day:
+                continue
+            if day in seen_dates:
+                warnings.append(f"row {index}: duplicate snapshot date {day}")
+                history = [h for h in history if h["date"] != day]
+                continue
+            seen_dates.add(day)
+            def value(name):
+                amount = parse_money(cells[header.index(name)]) if name in header else None
+                return amount if amount is not None and amount.is_finite() else None
+            holdings = {name: value(name) for name in asset_names}
+            mortgage = value("mortgage (owed)")
+            missing = [name for name, amount in holdings.items() if amount is None]
+            if mortgage is None:
+                missing.append("mortgage (owed)")
+            for subtotal, names in (("cash totals", asset_names[:5]), ("pension totals", asset_names[5:8])):
+                total = value(subtotal)
+                if total is not None and all(holdings[n] is not None for n in names):
+                    if abs(total - sum(holdings[n] for n in names)) > CENT:
+                        warnings.append(f"row {index}: {subtotal} does not match holdings")
+            if missing:
+                warnings.append(f"row {index}: incomplete snapshot: {', '.join(missing)}")
+                continue
+            assets = sum(holdings.values(), Decimal("0"))
+            history.append({"date": day, "assets": _money(assets), "liabilities": _money(-abs(mortgage)),
+                            "net": _money(assets - abs(mortgage))})
+        history.sort(key=lambda h: h["date"])
+        if not history:
+            return {"available": False, "reason": "no complete dated balances", "warnings": warnings}
+        return {"available": True, "latest": history[-1], "history": history, "currency": "EUR",
+                "warnings": warnings, "provisional": bool(warnings)}
     date_col, amount_col = col("date"), col("amount eur", "balance eur", "amount", "balance")
     type_col, label_col = col("type"), col("item", "holding", "account", "description", "name")
     subtotal_col = col("subtotal", "is subtotal")

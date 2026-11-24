@@ -1,0 +1,21 @@
+name: Finance corrective checks
+on:
+  push:
+    branches: ['fix/finance-correctness-phases-1-5']
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      FLASK_ENV: development
+      JWT_SECRET_KEY: synthetic-test-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
