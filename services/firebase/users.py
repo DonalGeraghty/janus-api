@@ -21,7 +21,7 @@ from .core import normalize_user_email
 from .nutrition import delete_nutrition_entries
 from .flashcards import delete_flashcards
 from .openai_credentials import delete_all_ai_credentials
-from .garmin import delete_garmin_account_data
+from .legacy_garmin import delete_garmin_account_data
 from .push import delete_push_data
 from .workouts import delete_workout_entries
 from .habits import delete_habit_data

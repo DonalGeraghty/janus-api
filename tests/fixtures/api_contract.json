@@ -169,65 +169,6 @@
       ]
     },
     {
-      "path": "/api/garmin/activities/<int:activity_id>",
-      "methods": [
-        "GET",
-        "POST"
-      ]
-    },
-    {
-      "path": "/api/garmin/activities/<int:activity_id>/workouts",
-      "methods": [
-        "GET",
-        "POST"
-      ]
-    },
-    {
-      "path": "/api/garmin/connection",
-      "methods": [
-        "DELETE",
-        "GET",
-        "PUT"
-      ]
-    },
-    {
-      "path": "/api/garmin/data/<resource>",
-      "methods": [
-        "GET"
-      ]
-    },
-    {
-      "path": "/api/garmin/data/activities",
-      "methods": [
-        "GET"
-      ]
-    },
-    {
-      "path": "/api/garmin/data/sleep",
-      "methods": [
-        "GET"
-      ]
-    },
-    {
-      "path": "/api/garmin/data/steps",
-      "methods": [
-        "GET"
-      ]
-    },
-    {
-      "path": "/api/garmin/preferences",
-      "methods": [
-        "GET",
-        "PUT"
-      ]
-    },
-    {
-      "path": "/api/garmin/refresh",
-      "methods": [
-        "POST"
-      ]
-    },
-    {
       "path": "/api/habit-<kind>",
       "methods": [
         "POST"
@@ -426,7 +367,6 @@
       "delete_nutrition_entry": "DELETE /api/nutrition/entries/{entry_id}",
       "delete_openai_key": "DELETE /api/user/openai-key",
       "delete_push_subscription": "DELETE /api/user/push-subscriptions",
-      "disconnect_garmin": "DELETE /api/garmin/connection",
       "draft_habits": "POST /api/habits/draft",
       "finance_budgets": "GET /api/finance/budgets",
       "finance_cashflow": "GET /api/finance/cashflow?period=&by=month|category",
@@ -446,14 +386,6 @@
       "finance_trends": "GET /api/finance/trends?period=",
       "get_ai_credential_status": "GET /api/user/ai-credentials/{provider}",
       "get_ai_settings": "GET /api/user/ai-settings",
-      "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5",
-      "get_garmin_activity": "GET /api/garmin/activities/{activity_id}",
-      "get_garmin_connection": "GET /api/garmin/connection",
-      "get_garmin_health": "GET /api/garmin/data/{resource}?start=YYYY-MM-DD&end=YYYY-MM-DD",
-      "get_garmin_preferences": "GET /api/garmin/preferences",
-      "get_garmin_sleep": "GET /api/garmin/data/sleep?date=YYYY-MM-DD",
-      "get_garmin_steps": "GET /api/garmin/data/steps?start=YYYY-MM-DD&end=YYYY-MM-DD",
-      "get_garmin_workouts": "GET /api/garmin/activities/{activity_id}/workouts",
       "get_openai_key_status": "GET /api/user/openai-key",
       "get_push_settings": "GET /api/user/push-settings",
       "habit": "PUT/DELETE /api/habits/{habit_id}",
@@ -465,12 +397,9 @@
       "list_nutrition_entries": "GET /api/nutrition/entries",
       "login": "POST /api/auth/login",
       "recommend_meals": "POST /api/nutrition/recommend",
-      "refresh_garmin_steps": "POST /api/garmin/refresh",
       "register": "POST /api/auth/register",
       "set_ai_credential": "PUT /api/user/ai-credentials/{provider}",
       "set_ai_settings": "PUT /api/user/ai-settings",
-      "set_garmin_connection": "PUT /api/garmin/connection",
-      "set_garmin_preferences": "PUT /api/garmin/preferences",
       "set_openai_key": "PUT /api/user/openai-key",
       "set_push_settings": "PUT /api/user/push-settings",
       "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}"
