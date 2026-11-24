@@ -104,7 +104,7 @@ def save_finance_connection(email, account_id, ciphertext, last_four, workbook_i
         except FinanceConnectionError:
             raise
         except Exception as error:
-            logger.error("Finance connection save failed: %s", type(error).__name__)
+            logger.error("Finance connection save failed: %s: %s", type(error).__name__, str(error)[:200])
             raise FinanceConnectionError("Finance storage is unavailable", 503) from error
 
     with db_state.memory_lock:
@@ -137,7 +137,7 @@ def get_finance_connection_status(email, account_id):
         except FinanceConnectionError:
             raise
         except Exception as error:
-            logger.error("Finance connection read failed: %s", type(error).__name__)
+            logger.error("Finance connection read failed: %s: %s", type(error).__name__, str(error)[:200])
             raise FinanceConnectionError("Finance storage is unavailable", 503) from error
     with db_state.memory_lock:
         _guard(db_state.auth_users_memory.get(email), account_id)
@@ -178,11 +178,12 @@ def delete_finance_connection(email, account_id, deletion_token=None):
         def execute(transaction):
             user = user_ref.get(transaction=transaction)
             _guard(user.to_dict() if user.exists else None, account_id, deletion_token)
-            transaction.delete(credential_ref)
+            # All reads must precede writes inside a Firestore transaction.
             settings_document = settings_ref.get(transaction=transaction)
             settings = settings_document.to_dict() if settings_document.exists else {}
             connection = dict(settings.get("finance_connection") or {})
             workbook_id = connection.get("workbook_id")
+            transaction.delete(credential_ref)
             _write_settings(transaction, settings_ref, settings, False, workbook_id, None)
             return _status(False, settings)
 
@@ -195,7 +196,7 @@ def delete_finance_connection(email, account_id, deletion_token=None):
         except FinanceConnectionError:
             raise
         except Exception as error:
-            logger.error("Finance connection delete failed: %s", type(error).__name__)
+            logger.error("Finance connection delete failed: %s: %s", type(error).__name__, str(error)[:200])
             raise FinanceConnectionError("Finance storage is unavailable", 503) from error
 
     with db_state.memory_lock:

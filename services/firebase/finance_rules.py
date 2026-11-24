@@ -107,7 +107,7 @@ def _operate(email, account_id, operation, deletion_token=None):
         except FinanceError:
             raise
         except Exception as error:
-            logger.error("Finance rule storage failed: %s", type(error).__name__)
+            logger.error("Finance rule storage failed: %s: %s", type(error).__name__, str(error)[:200])
             raise FinanceError("Finance storage is unavailable", 503) from error
 
     with db_state.memory_lock:
@@ -138,7 +138,7 @@ def list_rules(email, account_id, include_deleted=False, scope=None, status=None
                    and (scope is None or rule.get("scope") == scope)
                    and (status is None or rule.get("status") == status)}
         return {"rules": _sorted_public(visible),
-                "rule_set_version": settings.get("rule_set_version", 0)}, [], [], None
+                "rule_set_version": settings.get("rule_set_version", 0)}, {}, [], None
     return _operate(email, account_id, read)
 
 
@@ -288,9 +288,9 @@ def export_rules(email, account_id, fmt, include_deleted=False):
         visible = [rule for rule in rules.values() if include_deleted or rule.get("status") != "deleted"]
         if fmt == "csv":
             return {"format": "csv", "csv": rules_to_csv(visible),
-                    "rule_set_version": settings.get("rule_set_version", 0)}, [], [], None
+                    "rule_set_version": settings.get("rule_set_version", 0)}, {}, [], None
         if fmt == "json":
-            return {"format": "json", **rules_to_json_payload(visible, settings.get("rule_set_version", 0))}, [], [], None
+            return {"format": "json", **rules_to_json_payload(visible, settings.get("rule_set_version", 0))}, {}, [], None
         raise FinanceError("format must be 'csv' or 'json'", 400)
     return _operate(email, account_id, read)
 
@@ -310,7 +310,7 @@ def test_rules(email, account_id, rows, rule_ids=None):
             selected = [rule for rule in selected if rule["rule_id"] in set(rule_ids)]
         results, conflicts = evaluate_rows(selected, rows)
         return {"results": results, "conflicts": conflicts,
-                "rule_set_version": settings.get("rule_set_version", 0)}, [], [], None
+                "rule_set_version": settings.get("rule_set_version", 0)}, {}, [], None
     return _operate(email, account_id, read)
 
 
@@ -332,7 +332,7 @@ def _read_history(email, account_id):
         except FinanceError:
             raise
         except Exception as error:
-            logger.error("Finance history read failed: %s", type(error).__name__)
+            logger.error("Finance history read failed: %s: %s", type(error).__name__, str(error)[:200])
             raise FinanceError("Finance storage is unavailable", 503) from error
     else:
         with db_state.memory_lock:
