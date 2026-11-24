@@ -31,6 +31,24 @@
       ]
     },
     {
+      "path": "/api/finance/budgets",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/cashflow",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/categories",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
       "path": "/api/finance/connection",
       "methods": [
         "DELETE"
@@ -46,6 +64,18 @@
       "path": "/api/finance/connection",
       "methods": [
         "PUT"
+      ]
+    },
+    {
+      "path": "/api/finance/merchants",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/net-worth",
+      "methods": [
+        "GET"
       ]
     },
     {
@@ -103,6 +133,18 @@
       ]
     },
     {
+      "path": "/api/finance/sinking-funds",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/summary",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
       "path": "/api/finance/sync",
       "methods": [
         "POST"
@@ -110,6 +152,18 @@
     },
     {
       "path": "/api/finance/sync/status",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/transactions",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/trends",
       "methods": [
         "GET"
       ]
@@ -374,13 +428,22 @@
       "delete_push_subscription": "DELETE /api/user/push-subscriptions",
       "disconnect_garmin": "DELETE /api/garmin/connection",
       "draft_habits": "POST /api/habits/draft",
+      "finance_budgets": "GET /api/finance/budgets",
+      "finance_cashflow": "GET /api/finance/cashflow?period=&by=month|category",
+      "finance_categories": "GET /api/finance/categories?period=",
       "finance_connection": "GET/PUT/DELETE /api/finance/connection",
+      "finance_merchants": "GET /api/finance/merchants?period=",
+      "finance_net_worth": "GET /api/finance/net-worth",
       "finance_rules": "GET/POST /api/finance/rules; PUT/DELETE /api/finance/rules/{rule_id}",
       "finance_rules_export": "GET /api/finance/rules/export?format=csv|json",
       "finance_rules_history": "GET /api/finance/rules/history; POST /api/finance/rules/restore/{version}",
       "finance_rules_import": "POST /api/finance/rules/import (preview or commit)",
       "finance_rules_test": "POST /api/finance/rules/test",
+      "finance_sinking_funds": "GET /api/finance/sinking-funds",
+      "finance_summary": "GET /api/finance/summary?period=|start=&end=",
       "finance_sync": "POST /api/finance/sync; GET /api/finance/sync/status",
+      "finance_transactions": "GET /api/finance/transactions?period=&start=&end=&month=&type=&category=&merchant=&account=&search=&sort=&order=&limit=&offset=",
+      "finance_trends": "GET /api/finance/trends?period=",
       "get_ai_credential_status": "GET /api/user/ai-credentials/{provider}",
       "get_ai_settings": "GET /api/user/ai-settings",
       "get_garmin_activities": "GET /api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5",
