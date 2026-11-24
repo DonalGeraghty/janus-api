@@ -380,6 +380,48 @@ def parse_net_worth(snapshot_grid):
             if name in header:
                 return header.index(name)
         return None
+    # The production snapshot has one row per date and holdings in columns.
+    asset_names = ("supersaver", "boi goalsaver", "boi current account", "revolut", "monzo",
+                   "pension mercer workday", "pension efx new ireland", "pension sie zurich",
+                   "dejiro", "apartment value")
+    if "mortgage (owed)" in header and "date" in header:
+        from .finance_sheets import parse_date, parse_money
+        history, warnings = [], []
+        seen_dates = set()
+        for index, row in enumerate(snapshot_grid[1:], 2):
+            cells = list(row) + [None] * max(0, len(header) - len(row))
+            day = parse_date(cells[header.index("date")])
+            if not day:
+                continue
+            if day in seen_dates:
+                warnings.append(f"row {index}: duplicate snapshot date {day}")
+                history = [h for h in history if h["date"] != day]
+                continue
+            seen_dates.add(day)
+            def value(name):
+                amount = parse_money(cells[header.index(name)]) if name in header else None
+                return amount if amount is not None and amount.is_finite() else None
+            holdings = {name: value(name) for name in asset_names}
+            mortgage = value("mortgage (owed)")
+            missing = [name for name, amount in holdings.items() if amount is None]
+            if mortgage is None:
+                missing.append("mortgage (owed)")
+            for subtotal, names in (("cash totals", asset_names[:5]), ("pension totals", asset_names[5:8])):
+                total = value(subtotal)
+                if total is not None and all(holdings[n] is not None for n in names):
+                    if abs(total - sum(holdings[n] for n in names)) > CENT:
+                        warnings.append(f"row {index}: {subtotal} does not match holdings")
+            if missing:
+                warnings.append(f"row {index}: incomplete snapshot: {', '.join(missing)}")
+                continue
+            assets = sum(holdings.values(), Decimal("0"))
+            history.append({"date": day, "assets": _money(assets), "liabilities": _money(-abs(mortgage)),
+                            "net": _money(assets - abs(mortgage))})
+        history.sort(key=lambda h: h["date"])
+        if not history:
+            return {"available": False, "reason": "no complete dated balances", "warnings": warnings}
+        return {"available": True, "latest": history[-1], "history": history, "currency": "EUR",
+                "warnings": warnings, "provisional": bool(warnings)}
     date_col, amount_col = col("date"), col("amount eur", "balance eur", "amount", "balance")
     type_col, label_col = col("type"), col("item", "holding", "account", "description", "name")
     subtotal_col = col("subtotal", "is subtotal")
