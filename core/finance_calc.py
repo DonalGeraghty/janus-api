@@ -229,17 +229,17 @@ def classify_event(original):
     kind = row.get("type")
     event = None
     purpose = None
-    if status == "resolved duplicate" or status == "confirmed duplicate":
+    if status == "confirmed duplicate" or (status == "resolved duplicate" and row.get("include_provisional_totals") != "YES"):
         event = "confirmed_duplicate"
     elif status in ("reverted", "failed"):
         event = status
     elif "sinking fund" in text:
         if "release" in text and amount > 0 and kind in ("Transfer", "Refund"):
             event = "sinking_release"
-        elif ("management fee" in text or "local property tax" in text or re.search(r"\blpt\b", text)) and kind == "Expense" and "funded" in text and "unfunded" not in text:
+        elif ("management fee" in text or "local property tax" in text or re.search(r"\blpt\b", text)) and kind == "Expense" and ("paid from sinking fund" in text or "funded by sinking fund" in text or "funded from sinking fund" in text) and "unfunded" not in text:
             event = "covered_sinking_bill"
             purpose = "apartment_management_fee" if "management fee" in text else "local_property_tax"
-        elif "contribution" in text or "allocation" in text or "transfer to sinking fund" in text or row.get("category") == "Sinking Fund" and kind == "Expense":
+        elif kind in ("Transfer", "Expense") and ("contribution" in text or "allocation" in text or "transfer to sinking fund" in text or row.get("category") == "Sinking Fund" and kind == "Expense"):
             event = "sinking_contribution_outgoing" if amount < 0 else "sinking_contribution_receiving"
             purpose = "shared_sinking_fund"
         elif kind == "Transfer":
@@ -263,7 +263,7 @@ def canonicalize(rows):
             d.update(excluded=True, review=True, exclusion_reason="duplicate_transaction_id")
         if tid and not d["excluded"]:
             seen.add(tid)
-        if row.get("event_type") in ALWAYS_EXCLUDED_EVENTS or row.get("amount_eur") is None:
+        if row.get("event_type") in ALWAYS_EXCLUDED_EVENTS or row.get("amount_eur") is None or not row.get("date") or not row.get("month") or not tid:
             d.update(excluded=True, exclusion_reason="invalid_or_excluded_event")
     duplicates, conflicts = _receipt_groups(rows)
     for row in rows:
@@ -278,8 +278,10 @@ def canonicalize(rows):
         investment = transfer = Decimal("0")
         if not d["excluded"]:
             if event in TRANSFER_EVENTS:
+                d["type"] = "Transfer"
                 transfer = amount
             elif event in INVESTMENT_EVENTS:
+                d["type"] = "Transfer"
                 investment = amount
             elif event == "sinking_contribution_outgoing" and row.get("fund_purpose") in SINKING_PURPOSES | {"shared_sinking_fund"} and amount < 0:
                 d.update(type="Expense", category="Sinking Fund")
