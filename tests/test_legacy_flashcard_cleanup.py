@@ -41,7 +41,7 @@ class RetiredFlashcardApiTests(unittest.TestCase):
     def test_legacy_data_is_preserved_until_explicit_account_deletion(self):
         db_state.flashcards_memory['legacy@example.com'] = {'old': {'front': 'Keep'}}
         db_state.flashcard_reviews_memory['legacy@example.com'] = {'review': {'card_id': 'old'}}
-        self.assertEqual(self.client.get('/api/garmin/connection', headers=self.headers).status_code, 503)
+        self.assertEqual(self.client.get('/api/finance/connection', headers=self.headers).status_code, 200)
         self.assertIn('old', db_state.flashcards_memory['legacy@example.com'])
         result = self.client.delete('/api/auth/account', headers=self.headers, json={'password': 'password123'})
         self.assertEqual(result.status_code, 200)

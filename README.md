@@ -1,51 +1,12 @@
 # Janus API
 
-Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (habits), [Minerva](https://github.com/DonalGeraghty/minerva) (Garmin), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides authentication, encrypted per-user AI credentials, selectable AI models, habit drafting and tracking, meal analysis, Garmin access and caching, and account-owned storage.
-
-## Garmin dashboard resources (Minerva)
-
-Minerva has a combined steps, sleep, stress, HRV, weekly movement, weight, and hydration dashboard, with recent activities in a separate tab. It also supports on-demand full activity measurements/workouts, account-saved panel visibility, and Account connection controls. Its former study interface and related endpoints have been retired. The Garmin API is called only by Janus. Existing AI-provider selection and historical flashcard records are preserved.
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/garmin/connection` | Safe connection metadata |
-| `PUT` | `/api/garmin/connection` | Validate and store `{ "api_key": "..." }` encrypted with Cloud KMS |
-| `DELETE` | `/api/garmin/connection` | Remove stored secrets and stop requests; retain saved history |
-| `GET` | `/api/garmin/data/steps?start=YYYY-MM-DD&end=YYYY-MM-DD` | Read daily steps for at most 28 inclusive days |
-| `GET` | `/api/garmin/data/sleep?date=YYYY-MM-DD` | Main sleep details for one Garmin calendar date |
-| `GET` | `/api/garmin/data/sleep?start=YYYY-MM-DD&end=YYYY-MM-DD` | Sleep history array for at most 28 inclusive days; Minerva requests seven |
-| `GET` | `/api/garmin/data/activities?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=5` | Latest summaries, descending by local start, over at most 28 inclusive days; limit 1–20 |
-| `GET` | `/api/garmin/data/{resource}?start=YYYY-MM-DD&end=YYYY-MM-DD` | Fixed health resources listed below; no caller-supplied upstream URLs |
-| `GET/POST` | `/api/garmin/activities/{activity_id}` | Cached full activity summary; POST forces refresh |
-| `GET/POST` | `/api/garmin/activities/{activity_id}/workouts` | Cached associated workouts; POST forces refresh |
-| `GET/PUT` | `/api/garmin/preferences` | Read/save `{ "visible_panels": ["steps", "sleep", ...] }` for the current account |
-| `POST` | `/api/garmin/refresh` | Force one resource to refresh with `{ "resources": ["steps"], "start": "YYYY-MM-DD", "end": "YYYY-MM-DD" }`; select `steps`, `sleep`, `activities`, or a health resource listed below |
-
-Sleep refreshes with different start/end dates refresh the history array using one Garmin `dailySleepSummariesByDate` request. Equal start/end dates retain the single-day response. History and single-day caches are distinct and share the sleep refresh cooldown. Only activity refreshes accept an optional integer `limit` (default 5). Activity searches use upstream offset zero, descending local start time, and exclude multisport child activities. The Activities tab displays five records over the 28 days ending on the selected date. Returned fields remain available for inspection, subject to the bounded response size.
-
-Health resource names are `stress`, `hrv`, `movement`, `weight`, and `hydration`. All accept at most 28 inclusive dates and use the same one-resource POST refresh contract. HRV 204 responses become empty successful results. Weight is displayed in kilograms according to the Personal API schema. Standalone `body-battery`, `heart-rate`, and `fitness-age` reads return 404; refresh and preference writes for these resources return 400. Saved preferences omit retired resources while preserving the remaining choices. Activity-specific heart-rate metrics remain available in activity details.
-
-Preferences default to the eight supported resource IDs (seven Dashboard panels plus Activities). Activities has its own tab and is always accessible in Minerva. Visibility is validated against this fixed catalog; duplicates and unknown IDs are rejected, while an empty list is allowed. Settings live in `users/{email}/garmin_settings/dashboard`, carry account-generation ownership, and survive connection replacement/disconnect. Account deletion removes them. Activity caches and refresh leases are isolated by activity ID and summary/workout resource, in addition to account/connection generation; activity cache keys use the current UTC date and 15-minute freshness. No new service, secret, or dependency is required.
-
-All routes require a current Janus bearer token and return `Cache-Control: no-store`. Garmin authentication failures use `409 garmin_reconnect_required`, separately from Janus login failures (`401`). Upstream secrets and error bodies are never returned.
-
-The existing `AI_KMS_KEY_NAME`, Firestore, and runtime service account are reused. Credentials live in `users/{email}/private/garmin`; keys and access tokens are KMS-encrypted with account/generation/purpose-bound authenticated data. Access tokens are obtained through Garmin's personal-key exchange and renewed before expiry. There is no plaintext, file, or in-memory credential fallback, and no additional runtime dependency or Google Cloud service is required.
-
-Resource responses have `data` and `meta` fields. Metadata includes epoch-second `fetched_at`, `fresh_until`, `last_attempt_at`, `source` (`garmin` or `cache`), `stale`, and an optional safe `warning`. A failed refresh retains the last successful data and timestamp when a copy exists. Empty successful results are cached too. Cached payloads are stored as bounded documents in `users/{email}/garmin_cache`, isolated by resource, connection generation, date range, and activity limit. Recent ranges (ending within four UTC days of today) use 15-minute freshness; older ranges use 24 hours. Cache freshness does not delete stored history.
-
-Resource-scoped refresh leases prevent overlapping requests for the same card across Cloud Run instances. Each resource has a minimum 10-second cooldown, while actual Garmin rate limits apply shared connection-wide backoff. A sleep outage does not block steps or activities. Upstream `Retry-After` delays are honoured. Manual refresh respects these controls. Connection replacement/disconnection and account deletion invalidate in-flight writes. Reconnecting uses a new cache generation, so old history cannot appear as the new connection's data. Account deletion also removes Garmin secrets, cached data, and any Garmin settings records. Disconnecting locally does not revoke the personal key at Garmin.
-
-Run the synthetic integration tests with `python -m unittest discover -s tests -p test_garmin_api.py`, and the full suite with `python -m unittest discover -s tests`. A live smoke test requires configured Firestore/KMS access and a personal key entered through Minerva's Account page. See [Garmin's authentication instructions](https://developer.garmin.com/gc-developer-program/personal/personal-api/) for the token exchange.
-
-Empty sleep records, empty calendar dates, and valid records belonging to another day return successful `data: null` responses for the selected date. Minerva displays its no-sleep message. These results use the normal cache and can be refreshed once a watch sync supplies data; malformed records still return a safe validation error.
-
-Garmin diagnostics go to the existing Cloud Run application logs (stderr). Search for `Garmin` in the Janus service logs to see resource/error codes, safe validation reasons, cached-fallback decisions, upstream HTTP failures, and upstream failure duration. Empty or mismatched sleep dates log a fixed reason without date values. Logs exclude credentials, user identifiers, and raw Garmin health data. No additional logging service is required.
+Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (habits), [Minerva](https://github.com/DonalGeraghty/minerva) (personal finance), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides authentication, encrypted per-user AI credentials, selectable AI models, habit drafting and tracking, meal analysis, finance rules and read-only Sheets access, and account-owned storage.
 
 ## Retired flashcard functionality
 
-Minerva now uses Garmin Overview and Account. The former flashcard CRUD/due/review endpoints, `POST /api/minerva/respond`, and `GET/PUT /api/user/minerva-settings` are removed and return 404. Card drafting prompts, provider methods, scheduling, and operational card storage code are removed too.
+Minerva now uses its finance dashboard and Account pages. The former flashcard CRUD/due/review endpoints, `POST /api/minerva/respond`, and `GET/PUT /api/user/minerva-settings` are removed and return 404. Card drafting prompts, provider methods, scheduling, and operational card storage code are removed too.
 
-Existing stored flashcards and review history are not migrated or erased by this release. The internal legacy cleanup module remains so explicit shared-account deletion still removes both collections with account-generation and deletion-token checks. Garmin, habit and nutrition routes, shared authentication, and AI credential/model settings remain active.
+Existing stored flashcards and review history are not migrated or erased by this release. The internal legacy cleanup module remains so explicit shared-account deletion still removes both collections with account-generation and deletion-token checks. Habit, nutrition and finance routes, shared authentication, and AI credential/model settings remain active. Historical Garmin records are still removed by guarded account deletion.
 
 Deploy the updated Minerva frontend before retiring the backend endpoints if older browser clients still need the study interface.
 
@@ -433,7 +394,6 @@ Update the fixture only for intentional public API changes.
 │   ├── nutrition.py             # Meal analysis, recommendations, entries
 │   ├── push.py                  # Push settings, subscriptions, scheduler dispatch
 │   ├── habits.py                # Habit tracking and reviewable AI drafts
-│   ├── garmin.py                # Garmin connection, cached steps, refresh
 │   └── health.py                # Health check and API index
 ├── core/
 │   ├── auth_service.py          # Password hashing and JWT handling
@@ -464,7 +424,7 @@ Update the fixture only for intentional public API changes.
 ## Related projects
 
 - [Aether](https://github.com/DonalGeraghty/aether) — React frontend for habit tracking and AI-assisted habit creation
-- [Minerva](https://github.com/DonalGeraghty/minerva) — React frontend for personal Garmin data
+- [Minerva](https://github.com/DonalGeraghty/minerva) — React frontend for the personal finance dashboard
 - [Nyx](https://github.com/DonalGeraghty/nyx) — React frontend for nutrition tracking
 
 ## Overall architecture
@@ -488,5 +448,5 @@ Nyx (React/Vite, Cloud Run)      ─┘                                 │     
 - Each frontend is a static Vite build served by nginx in its own container (Node build stage, then `nginx:alpine`, port `8080`, with a `/health` endpoint), deployed from its own Artifact Registry repository (`aether`, `minerva`, `nyx`) by its own `deploy-gcp.yml` GitHub Actions workflow. Those workflows build, push, then `gcloud run deploy`, preferring Workload Identity Federation with a `GCP_SA_KEY` secret as a fallback.
 - Janus API deploys differently: `.github/workflows/deploy.yml` runs `gcloud run deploy --source .`, which lets Cloud Build produce the container directly from source, so there is no separate Artifact Registry push step and no Workload Identity Federation — authentication uses only the static `GCP_SA_KEY` secret.
 - Every frontend points at this service via a `VITE_JANUS_API_URL` build-time variable (defaulting to the deployed Janus API URL). Because all three frontends talk to the same Janus API deployment and Firestore project, a single account's credentials, selected AI provider/model, and login session are shared across Aether, Minerva, and Nyx.
-- Each frontend calls its own product endpoints (Aether → `/api/habits/*` and habit label/check-in endpoints, Nyx → `/api/nutrition/*`, Minerva → `/api/garmin/*`) plus shared authentication and AI-credential endpoints. Workout and flashcard history are retained only for legacy-data cleanup.
+- Each frontend calls its own product endpoints (Aether → `/api/habits/*` and habit label/check-in endpoints, Nyx → `/api/nutrition/*`, Minerva → `/api/finance/*`) plus shared authentication and AI-credential endpoints. Workout, flashcard and Garmin history are retained only for legacy-data cleanup.
 - Two pieces of infrastructure still carry pre-rename names from when this service only served Nyx: the KMS keyring `janus-gate` (kept because existing encrypted credentials are bound to its resource name) and the Cloud Scheduler job `nyx-push-reminders` (renaming it has no functional benefit, since it now dispatches reminders for every app's users).
