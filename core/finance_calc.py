@@ -114,6 +114,9 @@ def derive_rows(rules, rows):
         row = classify_event(original)
         outcome = apply_rules(rules, row)
         excluded = outcome is not None and outcome["action"] == "exclude"
+        # Generic transfer rules must not suppress an explicitly identified contribution or release.
+        if excluded and outcome.get("field") == "type" and row.get("type") == "Transfer" and row.get("event_type") in ("sinking_contribution_outgoing", "sinking_release"):
+            excluded = False
         if row.get("include_provisional_totals") != "YES":
             excluded = True
         base_type = row.get("type")
@@ -129,6 +132,7 @@ def derive_rows(rules, rows):
                 "action": outcome["action"] if outcome else None,
                 "action_value": outcome["action_value"] if outcome else "",
                 "excluded": excluded,
+                "exclusion_reason": ("sheet_inclusion_not_yes" if row.get("include_provisional_totals") != "YES" else "rule_exclusion") if excluded else None,
                 "review": outcome is not None and outcome["action"] == "flag",
                 "type": base_type,
                 "category": category,
@@ -174,7 +178,7 @@ def _sinking_walk(rows):
         key=lambda r: (r.get("month") or "", r.get("date") or "", r.get("row") or 0),
     )
     balance = Decimal("0")
-    opening_verified = any(r.get("recognition_status") == "verified" for r in rows)
+    opening_verified = False  # No verified opening-balance field in the production ledger.
     covered_by_row = {}
     months = {}
     for row in events:
@@ -255,16 +259,25 @@ def classify_event(original):
 
 def canonicalize(rows):
     """Compute a single effective budget amount for all downstream consumers."""
+    # Conflicting eligible IDs are not resolved by arbitrary sheet order.
+    ids = {}
+    for row in rows:
+        if row.get("transaction_id") and not row["derived"]["excluded"]:
+            ids.setdefault(row["transaction_id"], []).append(row)
     seen = set()
     for row in rows:
         d = row["derived"]
         tid = row.get("transaction_id")
+        if tid and len(ids.get(tid, [])) > 1:
+            signatures = {tuple(r.get(k) for k in ("date", "month", "amount_eur", "type", "account", "description", "category")) for r in ids[tid]}
+            if len(signatures) > 1:
+                d.update(excluded=True, review=True, exclusion_reason="conflicting_transaction_id")
         if tid and tid in seen:
             d.update(excluded=True, review=True, exclusion_reason="duplicate_transaction_id")
+        if row.get("event_type") in ALWAYS_EXCLUDED_EVENTS or row.get("amount_eur") is None or not row.get("date") or not row.get("month") or not tid:
+            d.update(excluded=True, review=True, exclusion_reason="invalid_or_excluded_event")
         if tid and not d["excluded"]:
             seen.add(tid)
-        if row.get("event_type") in ALWAYS_EXCLUDED_EVENTS or row.get("amount_eur") is None or not row.get("date") or not row.get("month") or not tid:
-            d.update(excluded=True, exclusion_reason="invalid_or_excluded_event")
     duplicates, conflicts = _receipt_groups(rows)
     for row in rows:
         if id(row) in duplicates:
