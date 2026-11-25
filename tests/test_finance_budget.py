@@ -49,6 +49,27 @@ class FinanceBudgetTests(unittest.TestCase):
     def plan(self, body=None):
         return self.client.post("/api/finance/budget/plan", headers=self.headers, json=body or {})
 
+    def test_stream_reports_actual_stages_then_the_plan(self):
+        response = self.client.post('/api/finance/budget/plan', headers={**self.headers, 'Accept':'application/x-ndjson'}, json={})
+        events = [json.loads(line) for line in response.get_data(as_text=True).splitlines()]
+        self.assertEqual(response.mimetype, 'application/x-ndjson')
+        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertEqual([e['stage'] for e in events if e['event']=='progress'], ['checking','reviewing','preparing'])
+        self.assertEqual(events[-1]['event'],'result')
+        self.assertEqual(events[-1]['data']['plan']['future_income_eur'],'1000.00')
+
+    def test_stream_reports_repair_and_terminal_errors_without_exposing_payloads(self):
+        broken=proposal()
+        broken['categories'][0]['remaining']['save_more']='10.00'
+        self.plan_mock.return_value=json.dumps(broken)
+        response=self.client.post('/api/finance/budget/plan',headers={**self.headers,'Accept':'application/x-ndjson'},json={})
+        events=[json.loads(line) for line in response.get_data(as_text=True).splitlines()]
+        self.assertIn('refining',[e['stage'] for e in events if e['event']=='progress'])
+        self.assertEqual(events[-1]['event'],'error')
+        self.assertEqual(events[-1]['http_status'],422)
+        self.assertEqual(events[-1]['data']['error'],'budget_invalid_proposal')
+        self.assertNotIn('ciphertext',response.get_data(as_text=True))
+
     def test_context_scope_metadata_and_unknown_cash(self):
         body = self.context()
         context = body["context"]
