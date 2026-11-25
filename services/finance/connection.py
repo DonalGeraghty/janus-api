@@ -3,10 +3,13 @@
 import re
 from urllib.parse import urlparse
 
-from core.finance_sheets import rows_to_transactions
-from . import google_sheets, sheets_identity
-from .firebase.finance_connection import get_finance_connection_status, save_finance_connection
-from .firebase.finance_rules import FinanceError
+from core.finance.sheets import rows_to_transactions
+from . import sheets as google_sheets, identity as sheets_identity
+from services.firebase.finance.connections import (
+    get_finance_connection_status,
+    save_finance_connection,
+)
+from services.firebase.finance.rules import FinanceError
 
 WORKBOOK_PATTERN = re.compile(r"^[A-Za-z0-9_-]{10,128}$")
 

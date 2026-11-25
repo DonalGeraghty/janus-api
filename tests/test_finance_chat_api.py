@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 from app import app
 from core.auth_service import create_access_token
-from core.finance_sheets import SHEETS_EPOCH
-from services import google_sheets
+from core.finance.sheets import SHEETS_EPOCH
+from services.finance import sheets as google_sheets
 from services.ai_errors import AIRateLimitError
 from services.firebase import db_state
 
@@ -39,23 +39,23 @@ class FinanceChatApiTests(unittest.TestCase):
                        db_state.finance_sync_status_memory)
         for store in self.stores:
             store.clear()
-        self.encrypt = patch("routes.finance.encrypt_api_key", return_value="fake-kms-ciphertext")
+        self.encrypt = patch("routes.finance.connection.encrypt_api_key", return_value="fake-kms-ciphertext")
         self.encrypt.start()
-        self.token = patch("services.finance_sync._load_token", return_value=TOKEN)
+        self.token = patch("services.finance.sync._load_token", return_value=TOKEN)
         self.token.start()
-        self.fetch = patch("services.google_sheets.fetch_values",
+        self.fetch = patch("services.finance.sheets.fetch_values",
                            side_effect=lambda wb, rng, tok, **kw: GRID if "combined" in rng else None)
         self.fetch.start()
-        self.chat = patch("routes.finance.ai_service.finance_chat", return_value="You spent €82.34 on groceries in 2026-11.")
+        self.chat = patch("routes.finance.chat.ai_service.finance_chat", return_value="You spent €82.34 on groceries in 2026-11.")
         self.chat_mock = self.chat.start()
         self.has_credential = False
-        self.selection = patch("routes.finance.selected_ai_credential",
+        self.selection = patch("routes.finance.chat.selected_ai_credential",
                                side_effect=lambda email, account_id: (
                                    {"provider": "openai", "model": "gpt-5.6-sol"},
                                    {"ciphertext": "fake", "aad_version": 2} if self.has_credential else None,
                                    None))
         self.selection.start()
-        self.decrypt = patch("routes.finance.decrypt_api_key", return_value="fake-api-key")
+        self.decrypt = patch("routes.finance.chat.decrypt_api_key", return_value="fake-api-key")
         self.decrypt.start()
         self.client = app.test_client()
         self.headers = self.register("owner@example.com")

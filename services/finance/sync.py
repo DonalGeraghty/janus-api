@@ -10,17 +10,21 @@ import threading
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from core.finance_sheets import LEDGER_RANGE, SNAPSHOT_RANGE, build_coverage, rows_to_transactions
-from services import google_sheets
-from services import sheets_identity
+from core.finance.sheets import LEDGER_RANGE, SNAPSHOT_RANGE, build_coverage, rows_to_transactions
+from services.finance import sheets as google_sheets
+from services.finance import identity as sheets_identity
 from services.credential_service import (
     CredentialConfigurationError,
     CredentialEncryptionError,
     decrypt_api_key,
 )
 from services.firebase import db_state
-from services.firebase.finance_connection import FinanceConnectionError, get_finance_connection_status, load_finance_credential
-from services.firebase.finance_rules import FinanceError, list_rules
+from services.firebase.finance.connections import (
+    FinanceConnectionError,
+    get_finance_connection_status,
+    load_finance_credential,
+)
+from services.firebase.finance.rules import FinanceError, list_rules
 
 
 _locks_guard = threading.Lock()
@@ -205,12 +209,3 @@ def summarize(snapshot, status):
         "warning_count": len(snapshot["warnings"]),
         "stale": status.get("stale", False),
     }
-
-
-def clear_finance_sync_state(email):
-    """Drop derived finance state (logout, disconnect, account deletion, restart)."""
-    with db_state.memory_lock:
-        db_state.finance_snapshots_memory.pop(email, None)
-        db_state.finance_sync_status_memory.pop(email, None)
-    # Keep the lock stable: removing it while an import is running would let a
-    # reconnect start a second import under a different lock for the same user.

@@ -24,7 +24,7 @@ from .openai_credentials import delete_all_ai_credentials
 from .push import delete_push_data
 from .workouts import delete_workout_entries
 from .habits import delete_habit_data
-from .finance_rules import delete_finance_account_data
+from .finance.rules import delete_finance_account_data
 from ..logging_service import logger
 
 

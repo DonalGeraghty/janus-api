@@ -6,7 +6,7 @@ Read-only ledger sync: `POST /api/finance/sync` reads the account's workbook (`c
 
 Read API: every endpoint reads one pinned snapshot (meta carries `snapshot_id` + `rule_set_version`; no mixed versions) and requires a prior successful sync (`409 sync_required` otherwise). Periods are whole calendar months in Europe/Dublin (`this_month` default, `last_month`, `last_3/6/12` including current, `ytd`, `all`, or custom `start`/`end`); missing months are reported as gaps, never zeros. Budget math sums signed Amount EUR for Income/Expense/Refund with inclusion YES, applies active rules deterministically (priority desc, rule_id asc; first match per independent effect wins) with per-row reasons, excludes transfers/savings/Food Pot from budget cash flow, reports investment principal separately, never subtracts Fee EUR twice, counts receipt groups once, and enforces duplicate/failed/reverted exclusions in code regardless of rules. The sinking fund keeps a stateful recognised-balance ledger across all history; unknown opening recognition blocks unsupported exclusions and is flagged provisional. Money is Decimal, serialized as decimal strings in EUR.
 
-Finance chat: `POST /api/finance/chat` requires a synced snapshot and the account's selected, KMS-stored AI credential. The backend runs the read-only tool registry (`core/finance_chat.py`) itself and sends the bounded pack (<=24 KiB) with the question to the chosen provider — the model never calculates and all financial text is treated as data. Responses carry snapshot/rule-set metadata, coverage, stale flag and a privacy note; they are `no-store` and never logged.
+Finance chat: `POST /api/finance/chat` requires a synced snapshot and the account's selected, KMS-stored AI credential. The backend runs the read-only tool registry (`core/finance/chat.py`) itself and sends the bounded pack (<=24 KiB) with the question to the chosen provider — the model never calculates and all financial text is treated as data. Responses carry snapshot/rule-set metadata, coverage, stale flag and a privacy note; they are `no-store` and never logged.
 
 ## Retired flashcard functionality
 
@@ -71,7 +71,7 @@ Snapshots and sync statuses are bound to the account generation, workbook, conne
 | `GET` | `/api/finance/rules/history` | Rule-set versions with actor, summary and changed IDs |
 | `POST` | `/api/finance/rules/restore/{version}` | Restore a previous rule-set version |
 
-Rules are data, never code. Fields, operators and actions are validated against fixed allowlists (`core/finance_rules.py`); an unknown action can never activate and is held with status `review`. Conflicting active assignments (same condition and priority, different outcomes) are reported and the incoming rows are held for review. Priority order is deterministic: higher `priority` first, then `rule_id`. CSV columns are `rule_id,scope,name,type,field,operator,value,action,action_value,priority,status,source_section,description`; `scope` is `janus` (executable/reporting) or `chatgpt_workflow` (reference only). Request bodies are capped at 256 KiB.
+Rules are data, never code. Fields, operators and actions are validated against fixed allowlists (`core/finance/rule_engine.py`); an unknown action can never activate and is held with status `review`. Conflicting active assignments (same condition and priority, different outcomes) are reported and the incoming rows are held for review. Priority order is deterministic: higher `priority` first, then `rule_id`. CSV columns are `rule_id,scope,name,type,field,operator,value,action,action_value,priority,status,source_section,description`; `scope` is `janus` (executable/reporting) or `chatgpt_workflow` (reference only). Request bodies are capped at 256 KiB.
 
 Row rules have three independent effects: an accounting decision (`classify`, `exclude`, `allocate`, `reverse`), a category override (`set_category`), and a review flag (`flag`). The first matching rule for each effect wins, so a high-priority classification does not hide a category or review rule. Predicates use the original row plus inferred event fields; actions do not trigger other predicates. `classify` accepts Income, Expense, Refund or Transfer, optionally `Type:Category`; an explicit `set_category` overrides that fallback category. Conflicts are checked within each effect, so compatible classification and category rules can be imported together.
 
@@ -445,61 +445,56 @@ The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, `ANTHROPIC_MODEL`, and `AI_
 
 ## Project structure
 
-`app.py` exposes `create_app(test_config=None)` and the existing module-level
-`app`. It configures Flask, CORS, request timing/logging, JSON error handlers,
-and blueprint registration. `python app.py`, Flask tooling, and imports such as
-`from app import app` continue to work without deployment changes.
-
-Each feature owns its HTTP routes in `routes/`. Shared JWT/account-generation
-checks live in `core/request_auth.py`; AI credential selection, ciphertext AAD
-version handling, and billing messages live in `services/ai_credentials.py`.
-Routes import these helpers directly and never import the application entry
-point. Account deletion deliberately uses its deletion-aware lookup so an
-interrupted deletion can resume while the account is tombstoned.
-
-The refactor preserves public URLs, methods, response formats, account isolation,
-credential encryption, and CORS behaviour. `tests/fixtures/api_contract.json`
-records the route inventory and API index immediately before extraction;
-`test_app_factory.py` verifies that contract, independent app configurations,
-request logging, authentication guards, CORS preflight, and JSON error handlers.
-Update the fixture only for intentional public API changes.
+Code is separated by responsibility: `routes` handles HTTP, `core` contains business rules and validation, and `services` coordinates external APIs and persistence. Finance has its own folder in each layer so its related files stay together.
 
 ```text
-.
-├── app.py                       # Application factory, shared setup, local entry point
-├── routes/
-│   ├── __init__.py              # Feature blueprint registration
-│   ├── auth.py                  # Registration, login, profile, account deletion
-│   ├── ai_settings.py           # Shared AI model settings and encrypted credentials
-│   ├── nutrition.py             # Meal analysis, recommendations, entries
-│   ├── push.py                  # Push settings, subscriptions, scheduler dispatch
-│   ├── habits.py                # Habit tracking and reviewable AI drafts
-│   └── health.py                # Health check and API index
-├── core/
-│   ├── auth_service.py          # Password hashing and JWT handling
-│   ├── request_auth.py          # Shared request identity and current account checks
-│   ├── nutrition_service.py     # Nutrition-entry validation
-│   ├── habit_service.py         # Habit validation, schedules, and streaks
-│   ├── habit_icons.py           # Shared allowed icon catalog
-│   └── push_service.py          # Web Push settings/subscription validation
-├── services/
-│   ├── firebase/                # Firestore persistence by data type
-│   ├── credential_service.py    # Cloud KMS encryption and decryption
-│   ├── ai_credentials.py        # Shared AI selection, AAD versions, billing messages
-│   ├── ai_catalog.py            # Allowlisted providers and models
-│   ├── ai_contract.py           # Shared meal and habit prompts and structured response schemas
-│   ├── ai_service.py            # Provider-neutral request dispatch
-│   ├── ai_errors.py             # Shared AI error mapping
-│   ├── ai_validation.py         # Shared AI response validation
-│   ├── anthropic_service.py      # Anthropic key verification and meal/habit generation
-│   ├── logging_service.py       # Console logging
-│   ├── mistral_service.py       # Mistral key verification and meal/habit generation
-│   ├── openai_service.py        # OpenAI key verification and meal/habit generation
-│   └── web_push_service.py      # VAPID signing and Web Push dispatch
-├── tests/                       # Unit and API tests
-├── Dockerfile
-└── requirements.txt
+app.py                              Application factory and entry point
+routes/
+  auth.py, ai_settings.py            Shared login and AI account settings
+  habits.py, nutrition.py, push.py   Aether, Nyx and reminders
+  health.py                         Health check and API index
+  finance/
+    __init__.py                     Registers the finance blueprint
+    shared.py                       Authentication gate, errors, request helpers
+    connection.py                   Workbook connection and migration endpoints
+    rules.py                        Rule CRUD, CSV imports and version history
+    reports.py                      Sync, ledger, dashboard and other reports
+    chat.py                         Ask endpoint and provider error handling
+core/
+  finance/
+    calculations.py                 Canonical accounting and report aggregates
+    sheets.py                       Ledger column/date/money parsing
+    rule_engine.py                  Rule validation, matching and dry runs
+    rule_csv.py                     Rule CSV interchange
+    chat.py                         Read-only AI context and prompt preparation
+  auth_service.py, request_auth.py   Passwords, JWTs and account identity
+  habit_service.py, habit_icons.py   Habit validation, schedules and streaks
+  nutrition_service.py              Nutrition validation and totals
+  push_service.py                   Reminder settings and subscription validation
+services/
+  finance/
+    sync.py                         Import orchestration and snapshot lifecycle
+    connection.py                   Workbook approval and access verification
+    identity.py                     Keyless reader credentials and token renewal
+    sheets.py                       Read-only Google Sheets HTTP client
+  firebase/
+    finance/
+      connections.py                Account/workbook bindings and connection state
+      rules.py                      Transactional rule storage and history
+    users.py, account_state.py       Account lifecycle and deletion guards
+    habits.py, nutrition.py, push.py Feature persistence
+    legacy_data.py, workouts.py      Historical data cleanup on account deletion
+    openai_credentials.py           Stored credentials for all AI providers
+    core.py, db_state.py            Firebase initialization and local stores
+  firebase_service.py               Shared Firebase API used by existing apps
+  ai_*.py, *_service.py              AI adapters, credentials, logging and Web Push
+scripts/                            One-time provisioning and administrator tools
+run_demo.py                         Synthetic Janus development harness
+start_local_demo.py                 Starts the sibling Janus and Minerva demos
+tests/                              Accounting, API and lifecycle regression checks
 ```
+
+For a finance change, start with its endpoint under `routes/finance`, follow the calculation into `core/finance`, or the import/Google request into `services/finance`. Firestore writes belong under `services/firebase/finance`. Source workbook values and guarded legacy-data deletion remain part of the existing contracts.
 
 ## Related projects
 

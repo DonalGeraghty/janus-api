@@ -8,7 +8,7 @@ stays lossless for machine round-trips.
 import csv
 import io
 
-from .finance_rules import validate_fields
+from .rule_engine import validate_fields
 
 CSV_HEADERS = [
     "rule_id", "scope", "name", "type", "field", "operator", "value", "action",

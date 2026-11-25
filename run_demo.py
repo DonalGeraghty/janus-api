@@ -17,7 +17,7 @@ WORKBOOK = "synthetic-local-demo-workbook"
 
 
 def demo_grids(today=None):
-    from core.finance_sheets import HEADER_TO_FIELD, SHEETS_EPOCH
+    from core.finance.sheets import HEADER_TO_FIELD, SHEETS_EPOCH
 
     today = today or datetime.now(ZoneInfo("Europe/Dublin")).date()
     ledger = [list(HEADER_TO_FIELD)]
@@ -90,8 +90,8 @@ def demo_application(today=None):
         ledger, wealth = demo_grids(today)
 
         def fetch_values(workbook_id, range_name, access_token, **kwargs):
-            from core.finance_sheets import LEDGER_RANGE, SNAPSHOT_RANGE
-            from services.google_sheets import SheetsError
+            from core.finance.sheets import LEDGER_RANGE, SNAPSHOT_RANGE
+            from services.finance.sheets import SheetsError
             if workbook_id != WORKBOOK:
                 raise SheetsError("workbook_not_found", 404)
             if range_name == LEDGER_RANGE:
@@ -100,13 +100,13 @@ def demo_application(today=None):
                 return wealth
             raise SheetsError("workbook_not_found", 404)
 
-        stack.enter_context(patch("services.google_sheets.fetch_values", side_effect=fetch_values))
-        stack.enter_context(patch("services.finance_sync._load_token", return_value="synthetic-demo-token"))
+        stack.enter_context(patch("services.finance.sheets.fetch_values", side_effect=fetch_values))
+        stack.enter_context(patch("services.finance.sync._load_token", return_value="synthetic-demo-token"))
 
         from app import create_app
         from core.auth_service import register_user
-        from services.firebase.finance_connection import save_finance_connection
-        from services import finance_sync
+        from services.firebase.finance.connections import save_finance_connection
+        from services.finance import sync as finance_sync
 
         real_sync = finance_sync.sync_now
 
@@ -116,7 +116,7 @@ def demo_application(today=None):
             result["source"] = "local_demo"
             return result
 
-        stack.enter_context(patch("services.finance_sync.sync_now", side_effect=sync_demo))
+        stack.enter_context(patch("services.finance.sync.sync_now", side_effect=sync_demo))
 
         application = create_app({"LOCAL_DEMO": True})
 

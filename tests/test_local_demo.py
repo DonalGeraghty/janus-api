@@ -49,7 +49,7 @@ class LocalDemoTests(unittest.TestCase):
             self.assertEqual(self.client.put(path, headers=self.headers, json={}).status_code, 403)
 
     def test_csv_rules_apply_to_ledger_and_charts_without_reimporting_data(self):
-        from services.finance_sync import get_snapshot
+        from services.finance.sync import get_snapshot
         before = get_snapshot(DEMO_EMAIL)
         snapshot_id = before["snapshot_id"]
         csv_text = (

@@ -11,7 +11,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from .finance_rules import ACTION_EFFECTS, action_value_error, active_executable_rules, matching_rule_effects
+from .rule_engine import (
+    ACTION_EFFECTS,
+    action_value_error,
+    active_executable_rules,
+    matching_rule_effects,
+)
 
 
 DUBLIN = ZoneInfo("Europe/Dublin")
@@ -419,7 +424,7 @@ def parse_net_worth(snapshot_grid):
                    "pension mercer workday", "pension efx new ireland", "pension sie zurich",
                    "dejiro", "apartment value")
     if "mortgage (owed)" in header and "date" in header:
-        from .finance_sheets import parse_date, parse_money
+        from .sheets import parse_date, parse_money
         history, warnings = [], []
         seen_dates = set()
         for index, row in enumerate(snapshot_grid[1:], 2):
@@ -461,7 +466,7 @@ def parse_net_worth(snapshot_grid):
     subtotal_col = col("subtotal", "is subtotal")
     if date_col is None or amount_col is None:
         return {"available": False, "reason": "snapshot tab missing Date or amount column"}
-    from .finance_sheets import parse_date, parse_money
+    from .sheets import parse_date, parse_money
     per_date = {}
     for row in snapshot_grid[1:]:
         cells = list(row) + [""] * (len(header) - len(row))

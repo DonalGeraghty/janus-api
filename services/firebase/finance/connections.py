@@ -11,11 +11,11 @@ from uuid import uuid4
 
 from firebase_admin import firestore
 
-from . import db_state
-from .account_state import ACCOUNT_DELETION_FIELD, ACCOUNT_DELETION_TOKEN_FIELD, account_id_matches
-from .core import normalize_user_email
-from ..logging_service import logger
-from ..sheets_identity import reader_email
+from .. import db_state
+from ..account_state import ACCOUNT_DELETION_FIELD, ACCOUNT_DELETION_TOKEN_FIELD, account_id_matches
+from ..core import normalize_user_email
+from ...logging_service import logger
+from services.finance.identity import reader_email
 
 
 PROVIDER = "google"
