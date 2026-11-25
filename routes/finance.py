@@ -1,9 +1,9 @@
 """Finance connection plus rules management: individual CRUD, CSV import/export, dry-run.
 
 A shared Janus login alone is not finance access: every /api/finance route except
-the connection endpoints requires the account to have its own KMS-encrypted Google
-Sheets credential stored (PUT /api/finance/connection), the same per-account model
-as the AI provider keys. All responses are Cache-Control: no-store.
+the connection endpoints requires the account to have its own Google Sheets
+connection (PUT /api/finance/connection), approved for the account when
+using the shared reader. All responses are Cache-Control: no-store.
 """
 
 import re
@@ -38,6 +38,7 @@ from services.firebase.finance_rules import (
     update_rule,
 )
 from services import finance_sync
+from services import finance_connection_setup
 from services import ai_service
 from core import finance_calc
 from core import finance_chat as finance_chat_core
@@ -111,6 +112,14 @@ def connection_status():
 def connection_save():
     identity = g.finance_identity
     data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(status="error", error="Supply a connection object."), 400
+    mode = data.get("mode", "access_token" if "access_token" in data else "service_account")
+    if mode == "service_account":
+        status = finance_connection_setup.connect(identity["email"], identity["account_id"], data.get("workbook_id"))
+        return jsonify(status="success", connection=status)
+    if mode != "access_token":
+        return jsonify(status="error", error="Unsupported connection mode."), 400
     token = data.get("access_token")
     workbook_id = data.get("workbook_id")
     if not isinstance(token, str) or not token.strip() or len(token) < 20 or len(token) > 2048 or any(c.isspace() for c in token):
@@ -233,7 +242,7 @@ def ledger_sync_status():
 
 
 def _snapshot_and_rules(identity):
-    snapshot = finance_sync.get_snapshot(identity["email"])
+    snapshot = finance_sync.get_snapshot(identity["email"], identity["account_id"])
     if snapshot is None:
         raise FinanceError("Sync the ledger first (POST /api/finance/sync).", 409, details={"code": "sync_required"})
     rule_set = list_rule_docs(identity["email"], identity["account_id"], scope="janus", status="active")
@@ -381,7 +390,7 @@ def chat():
         history = sanitize_history(body.get("history"))
     except ValueError as error:
         return jsonify(status="error", error=str(error)), 400
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return jsonify(status="error", error="sync_required",
                        message="Sync the ledger first (POST /api/finance/sync)."), 409

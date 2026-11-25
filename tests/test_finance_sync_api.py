@@ -151,7 +151,7 @@ class FinanceSyncApiTests(unittest.TestCase):
         result = self.client.post("/api/finance/sync", headers=self.headers)
         self.assertEqual(result.status_code, 409)
         self.assertEqual(result.get_json()["error"], "sheets_reconnect_required")
-        self.assertIn("Replace it in Account", result.get_json()["message"])
+        self.assertIn("Check workbook sharing in Account", result.get_json()["message"])
         self.fetch_mock.side_effect = grid_for(google_sheets.SheetsError("workbook_not_found", 404), SNAPSHOT_GRID)
         self.assertEqual(self.client.post("/api/finance/sync", headers=self.headers).status_code, 404)
 

@@ -12,13 +12,14 @@ from uuid import uuid4
 
 from core.finance_sheets import LEDGER_RANGE, SNAPSHOT_RANGE, build_coverage, rows_to_transactions
 from services import google_sheets
+from services import sheets_identity
 from services.credential_service import (
     CredentialConfigurationError,
     CredentialEncryptionError,
     decrypt_api_key,
 )
 from services.firebase import db_state
-from services.firebase.finance_connection import get_finance_connection_status, load_finance_credential
+from services.firebase.finance_connection import FinanceConnectionError, get_finance_connection_status, load_finance_credential
 from services.firebase.finance_rules import FinanceError, list_rules
 
 
@@ -26,7 +27,7 @@ _locks_guard = threading.Lock()
 _locks = {}
 
 _SHEETS_MESSAGES = {
-    "sheets_reconnect_required": "The Google access token was rejected. Replace it in Account (Google Sheets).",
+    "sheets_reconnect_required": "Google Sheets access was rejected. Check workbook sharing in Account, or reconnect a legacy token connection.",
     "workbook_not_found": "The finance workbook was not found or is not shared with the token's account.",
     "sheets_upstream_error": "Google Sheets returned an error. Last good data is retained.",
     "sheets_unreachable": "Google Sheets is unreachable. Last good data is retained.",
@@ -46,6 +47,13 @@ def _lock_for(email):
 
 def _load_token(email, account_id):
     credential = load_finance_credential(email, account_id)
+    if credential and credential.get("mode") == "service_account":
+        if credential.get("account_id") != account_id:
+            raise FinanceError("Account is unavailable", 401)
+        try:
+            return sheets_identity.access_token()
+        except sheets_identity.SheetsIdentityError as error:
+            raise FinanceError(str(error), 503) from None
     if not credential or not credential.get("ciphertext"):
         raise FinanceError("Connect your Google Sheets workbook in Account first.", 403)
     try:
@@ -70,6 +78,12 @@ def _empty_status():
     }
 
 
+def _binding(connection):
+    return (connection.get("account_id"), connection.get("workbook_id"),
+            connection.get("connection_id"), connection.get("mode"),
+            connection.get("service_account_email") if connection.get("mode") == "service_account" else None)
+
+
 def sync_now(email, account_id):
     """Pull, validate and atomically publish the ledger snapshot. Returns a bounded summary."""
     from services.firebase.core import normalize_user_email
@@ -80,11 +94,20 @@ def sync_now(email, account_id):
         connection = get_finance_connection_status(email, account_id)
         if not connection.get("connected") or not connection.get("workbook_id"):
             raise FinanceError("Connect your Google Sheets workbook in Account first.", 403)
-        status = db_state.finance_sync_status_memory.setdefault(email, _empty_status())
-        status["last_attempt_at"] = _now()
-        token = _load_token(email, account_id)
+        binding = _binding(connection)
+        with db_state.memory_lock:
+            status = db_state.finance_sync_status_memory.get(email)
+            if not status or status.get("binding") != binding:
+                status = {**_empty_status(), "binding": binding}
+                db_state.finance_sync_status_memory[email] = status
+            status["last_attempt_at"] = _now()
         try:
+            token = _load_token(email, account_id)
             values = google_sheets.fetch_values(connection["workbook_id"], LEDGER_RANGE, token)
+        except FinanceError:
+            status["error"] = "sheets_authentication_failed"
+            status["stale"] = get_snapshot(email, account_id) is not None
+            raise
         except google_sheets.SheetsError as error:
             status["error"] = error.code
             status["stale"] = email in db_state.finance_snapshots_memory
@@ -105,6 +128,8 @@ def sync_now(email, account_id):
             "fetched_at": fetched_at,
             "source": "google_sheets",
             "workbook_id": connection["workbook_id"],
+            "account_id": account_id,
+            "binding": binding,
             "rule_set_version": list_rules(email, account_id)["rule_set_version"],
             "rows": transactions,
             "snapshot_grid": snapshot_grid,
@@ -112,6 +137,10 @@ def sync_now(email, account_id):
             "coverage": build_coverage(transactions, fetched_at),
         }
         with db_state.memory_lock:
+            current = get_finance_connection_status(email, account_id)
+            if not current.get("connected") or _binding(current) != binding:
+                raise FinanceError("The workbook connection changed during import. Try again.", 409,
+                                   details={"code": "finance_connection_changed"})
             db_state.finance_snapshots_memory[email] = snapshot
             status.update({
                 "last_success_at": fetched_at,
@@ -129,18 +158,38 @@ def sync_status(email, account_id):
     email = normalize_user_email(email)
     if not email:
         raise FinanceError("Invalid account", 401)
-    get_finance_connection_status(email, account_id)  # account guard
+    connection = get_finance_connection_status(email, account_id)
+    snapshot = get_snapshot(email, account_id)
     with db_state.memory_lock:
         status = dict(db_state.finance_sync_status_memory.get(email) or _empty_status())
-        status["sync_required"] = email not in db_state.finance_snapshots_memory
+        if status.get("binding") != _binding(connection):
+            status = _empty_status()
+        status.pop("binding", None)
+        status["sync_required"] = snapshot is None
         status["rule_set_version"] = list_rules(email, account_id)["rule_set_version"]
         return status
 
 
-def get_snapshot(email):
-    """Internal accessor for later read endpoints; pinned to one snapshot ID."""
+def get_snapshot(email, account_id=None):
+    """Return only a snapshot belonging to the current account and connection."""
     with db_state.memory_lock:
-        return db_state.finance_snapshots_memory.get(email)
+        snapshot = db_state.finance_snapshots_memory.get(email)
+        if snapshot is None:
+            return None
+        expected = account_id or snapshot.get("account_id")
+        if not expected or snapshot.get("account_id") != expected:
+            return None
+        try:
+            connection = get_finance_connection_status(email, expected)
+        except FinanceConnectionError as error:
+            if error.status in (401, 409):
+                return None
+            raise
+        if not connection.get("connected") or snapshot.get("binding") != _binding(connection):
+            db_state.finance_snapshots_memory.pop(email, None)
+            db_state.finance_sync_status_memory.pop(email, None)
+            return None
+        return snapshot
 
 
 def summarize(snapshot, status):
@@ -163,5 +212,5 @@ def clear_finance_sync_state(email):
     with db_state.memory_lock:
         db_state.finance_snapshots_memory.pop(email, None)
         db_state.finance_sync_status_memory.pop(email, None)
-    with _locks_guard:
-        _locks.pop(email, None)
+    # Keep the lock stable: removing it while an import is running would let a
+    # reconnect start a second import under a different lock for the same user.
