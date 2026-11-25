@@ -130,3 +130,9 @@ def finance_chat(system, messages, email, api_key, provider="openai", model=None
         raise ValueError("invalid_provider")
     return _call_provider(provider, "finance_chat", system, messages, email, api_key,
                           _validated_model(provider, model))
+
+
+def finance_budget(system, messages, email, api_key, provider="openai", model=None):
+    """Budget JSON can contain three approaches and evidence for many categories."""
+    return _call_provider(provider, "finance_budget", system, messages, email, api_key,
+                          _validated_model(provider, model))

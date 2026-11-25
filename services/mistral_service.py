@@ -263,3 +263,7 @@ def finance_chat(system, messages, email, api_key, model):
         return content.strip()
     except (errors.MistralError, httpx.RequestError, ValidationError, json.JSONDecodeError, TypeError) as error:
         _raise_mapped_mistral_error(error)
+
+
+def finance_budget(system, messages, email, api_key, model):
+    return finance_chat(system, messages, email, api_key, model)

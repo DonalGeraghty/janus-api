@@ -293,3 +293,7 @@ def finance_chat(system, messages, email, api_key, model=None):
     except (AuthenticationError, PermissionDeniedError, RateLimitError, APIConnectionError,
             APITimeoutError, APIStatusError, ValidationError, json.JSONDecodeError, TypeError) as error:
         _raise_mapped_openai_error(error)
+
+
+def finance_budget(system, messages, email, api_key, model=None):
+    return finance_chat(system, messages, email, api_key, model)

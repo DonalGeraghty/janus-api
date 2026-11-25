@@ -31,6 +31,18 @@
       ]
     },
     {
+      "path": "/api/finance/budget/context",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/api/finance/budget/plan",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
       "path": "/api/finance/budgets",
       "methods": [
         "GET"
@@ -409,7 +421,9 @@
       "set_ai_settings": "PUT /api/user/ai-settings",
       "set_openai_key": "PUT /api/user/openai-key",
       "set_push_settings": "PUT /api/user/push-settings",
-      "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}"
+      "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}",
+      "finance_budget_context": "GET /api/finance/budget/context",
+      "finance_budget_plan": "POST /api/finance/budget/plan {notes, cushion_eur, corrections}"
     },
     "service": "Janus API"
   }
