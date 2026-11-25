@@ -423,7 +423,7 @@
       "set_push_settings": "PUT /api/user/push-settings",
       "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}",
       "finance_budget_context": "GET /api/finance/budget/context",
-      "finance_budget_plan": "POST /api/finance/budget/plan {notes, cushion_eur, corrections}"
+      "finance_budget_plan": "POST /api/finance/budget/plan {}"
     },
     "service": "Janus API"
   }

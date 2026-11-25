@@ -53,35 +53,36 @@ def sanitize_message(message):
     return message.strip()
 
 
-def _cap(items, limit):
-    return items[:limit]
+def _derived_rows(email, account_id):
+    snapshot = finance_sync.get_snapshot(email, account_id)
+    if snapshot is None:
+        return None
+    rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
+    return finance_calc.derive_rows(rules, snapshot["rows"])
 
 
 def tool_financial_summary(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email, account_id)
-    if snapshot is None:
+    rows = _derived_rows(email, account_id)
+    if rows is None:
         return {"available": False, "reason": "sync_required"}
-    rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
-    rows = finance_calc.derive_rows(rules, snapshot["rows"])
+    all_time = finance_calc.budget_view(rows, None, None)
     return {
         "this_month": finance_calc.budget_view(rows, *finance_calc.resolve_period("this_month"))["adjusted_totals"],
-        "all_time": finance_calc.budget_view(rows, None, None)["adjusted_totals"],
-        "available_months": finance_calc.budget_view(rows, None, None)["available_months"],
-        "provisional": finance_calc.budget_view(rows, None, None)["provisional"],
+        "all_time": all_time["adjusted_totals"],
+        "available_months": all_time["available_months"],
+        "provisional": all_time["provisional"],
     }
 
 
 def tool_transactions(email, account_id, args):
-    snapshot = finance_sync.get_snapshot(email, account_id)
-    if snapshot is None:
+    rows = _derived_rows(email, account_id)
+    if rows is None:
         return {"available": False, "reason": "sync_required"}
-    rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
-    rows = finance_calc.derive_rows(rules, snapshot["rows"])
     month = args.get("month") if isinstance(args, dict) else None
     filtered = [r for r in rows if not month or r.get("month") == month]
     filtered.sort(key=lambda r: (r.get("date") or "", r.get("row") or 0), reverse=True)
     out = []
-    for row in _cap(filtered, 25):
+    for row in filtered[:25]:
         out.append({k: row.get(k) for k in ("transaction_id", "date", "month", "description", "merchant",
                                             "amount_eur", "type", "category", "account")}
                    | {"rule": row["derived"]["rule_id"], "excluded": row["derived"]["excluded"]})
@@ -89,41 +90,33 @@ def tool_transactions(email, account_id, args):
 
 
 def tool_spending_by_category(email, account_id, args):
-    snapshot = finance_sync.get_snapshot(email, account_id)
-    if snapshot is None:
+    rows = _derived_rows(email, account_id)
+    if rows is None:
         return {"available": False, "reason": "sync_required"}
-    rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
-    rows = finance_calc.derive_rows(rules, snapshot["rows"])
     start, end = finance_calc.resolve_period("last_12")
-    return {"categories": _cap(finance_calc.aggregates(rows, start, end, "category"), 15)}
+    return {"categories": finance_calc.aggregates(rows, start, end, "category")[:15]}
 
 
 def tool_spending_by_merchant(email, account_id, args):
-    snapshot = finance_sync.get_snapshot(email, account_id)
-    if snapshot is None:
+    rows = _derived_rows(email, account_id)
+    if rows is None:
         return {"available": False, "reason": "sync_required"}
-    rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
-    rows = finance_calc.derive_rows(rules, snapshot["rows"])
     start, end = finance_calc.resolve_period("last_12")
-    return {"merchants": _cap(finance_calc.aggregates(rows, start, end, "merchant"), 15)}
+    return {"merchants": finance_calc.aggregates(rows, start, end, "merchant")[:15]}
 
 
 def tool_monthly_cashflow(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email, account_id)
-    if snapshot is None:
+    rows = _derived_rows(email, account_id)
+    if rows is None:
         return {"available": False, "reason": "sync_required"}
-    rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
-    rows = finance_calc.derive_rows(rules, snapshot["rows"])
     start, end = finance_calc.resolve_period("last_12")
     return {"monthly_net": finance_calc.cashflow(rows, start, end, "month")[-12:]}
 
 
 def tool_compare_periods(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email, account_id)
-    if snapshot is None:
+    rows = _derived_rows(email, account_id)
+    if rows is None:
         return {"available": False, "reason": "sync_required"}
-    rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
-    rows = finance_calc.derive_rows(rules, snapshot["rows"])
     this = finance_calc.budget_view(rows, *finance_calc.resolve_period("this_month"))["adjusted_totals"]
     last = finance_calc.budget_view(rows, *finance_calc.resolve_period("last_month"))["adjusted_totals"]
     return {"this_month": this, "last_month": last}
@@ -134,11 +127,9 @@ def tool_budget_status(email, _account_id, _args):
 
 
 def tool_sinking_fund_status(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email, account_id)
-    if snapshot is None:
+    rows = _derived_rows(email, account_id)
+    if rows is None:
         return {"available": False, "reason": "sync_required"}
-    rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
-    rows = finance_calc.derive_rows(rules, snapshot["rows"])
     return finance_calc.sinking_ledger(rows)
 
 

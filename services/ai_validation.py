@@ -12,3 +12,16 @@ class AICredentialValidation:
 
     api_key: str
     warning: str | None = None
+
+
+def normalize_api_key(api_key):
+    if not isinstance(api_key, str):
+        raise ValueError("invalid_api_key")
+    api_key = api_key.strip()
+    if (
+        len(api_key) < 20
+        or len(api_key) > 512
+        or any(char.isspace() for char in api_key)
+    ):
+        raise ValueError("invalid_api_key")
+    return api_key
