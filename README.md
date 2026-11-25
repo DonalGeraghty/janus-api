@@ -6,7 +6,7 @@ Read-only ledger sync: `POST /api/finance/sync` reads the account's workbook (`c
 
 Read API: every endpoint reads one pinned snapshot (meta carries `snapshot_id` + `rule_set_version`; no mixed versions) and requires a prior successful sync (`409 sync_required` otherwise). Periods are whole calendar months in Europe/Dublin (`this_month` default, `last_month`, `last_3/6/12` including current, `ytd`, `all`, or custom `start`/`end`); missing months are reported as gaps, never zeros. Budget math sums signed Amount EUR for Income/Expense/Refund with inclusion YES, applies active rules deterministically (priority desc, rule_id asc; first match per independent effect wins) with per-row reasons, excludes transfers/savings/Food Pot from budget cash flow, reports investment principal separately, never subtracts Fee EUR twice, counts receipt groups once, and enforces duplicate/failed/reverted exclusions in code regardless of rules. The sinking fund keeps a stateful recognised-balance ledger across all history; unknown opening recognition blocks unsupported exclusions and is flagged provisional. Money is Decimal, serialized as decimal strings in EUR.
 
-Finance chat: `POST /api/finance/chat` requires a synced snapshot and the account's selected, KMS-stored AI credential. The backend runs the read-only tool registry (`core/finance/chat.py`) itself and sends the bounded pack (<=24 KiB) with the question to the chosen provider — the model never calculates and all financial text is treated as data. Responses carry snapshot/rule-set metadata, coverage, stale flag and a privacy note; they are `no-store` and never logged.
+Finance agent: `POST /api/finance/chat` requires a synced snapshot and the account's selected, KMS-stored AI credential. Minerva starts with a small overview, then chooses native OpenAI/Anthropic/Mistral tools for exact scoped totals, spending breakdowns, monthly cashflow, period comparisons, small transaction pages and financial status. Janus validates every argument, scopes every read to the authenticated account and performs all arithmetic. Results label periods, filters, refunds, missing months and pagination. Responses carry the sources checked, snapshot/current-rule metadata, coverage, stale flag and a privacy note; they are `no-store` and financial payloads are never logged. Every provider round and final answer rechecks that the pinned evidence has not changed.
 
 ## Monthly AI budget planning
 
@@ -52,7 +52,7 @@ Configure `FINANCE_SHEETS_SERVICE_ACCOUNT=minerva-sheets-reader@YOUR_PROJECT.iam
 
 Account displays the reader email with a Copy button and accepts a spreadsheet link or ID. Connecting checks approval **before** calling Google, verifies the combined-data header, then replaces the connection. Failed verification preserves the existing connection. The frontend starts a full import after connecting and confirms completion separately.
 
-Snapshots and sync statuses are bound to the account generation, workbook, connection ID and reader identity. Replacing/disconnecting invalidates derived data; an in-flight import rechecks its binding before publication, and every read verifies its snapshot still belongs to the current connection. Removed approvals deny service-account access. Historical accounting, receipt allocation and Ask-context improvements remain separate follow-ups.
+Snapshots and sync statuses are bound to the account generation, workbook, connection ID and reader identity. Replacing/disconnecting invalidates derived data; an in-flight import rechecks its binding before publication, and every read verifies its snapshot still belongs to the current connection. Removed approvals deny service-account access. Historical accounting and receipt-allocation changes remain separate follow-ups.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -68,7 +68,7 @@ Snapshots and sync statuses are bound to the account generation, workbook, conne
 | `GET` | `/api/finance/net-worth` | Dated snapshot-tab balances; subtotals never double counted; explicit unavailable state when the tab is missing/unrecognized |
 | `GET` | `/api/finance/sinking-funds` | Stateful recognised-balance ledger; provisional until the opening balance is verified |
 | `GET` | `/api/finance/budgets` | Explicit `available: false` until verified budget data exists |
-| `POST` | `/api/finance/chat` | `{message, history?}` answered by the selected provider over a server-computed, owner-scoped context pack of read-only tool results (summary, transactions, categories, merchants, cashflow, period comparison, budgets, sinking funds, net worth, rules, data quality); no write tools; prompt/answer not persisted |
+| `POST` | `/api/finance/chat` | `{message, history?}` read-only finance agent with scoped native tool calls; exact server-computed totals and source metadata; no write tools; prompt/answer not persisted |
 | `GET` | `/api/finance/rules?include_deleted=&scope=&status=` | List rules and the current `rule_set_version` |
 | `POST` | `/api/finance/rules` | Create one validated rule (201) |
 | `PUT` | `/api/finance/rules/{rule_id}` | Version-checked update (`revision` required; 409 on mismatch) |
@@ -536,4 +536,10 @@ Nyx (React/Vite, Cloud Run)      ─┘                                 │     
 
 ## Finance code organization
 
-`core/finance/budget_models.py` defines the Budget request and structured provider response schemas; `core/finance/budget.py` builds evidence and reconciles proposals. Reports and Budget share `services/finance/evidence.py` for owner-scoped snapshots and current rules. Finance chat tools share their row interpretation setup in `core/finance/chat.py`. Provider-neutral key validation lives in `services/ai_validation.py`; each provider adapter retains its own SDK calls and error handling.
+`core/finance/budget_models.py` defines the Budget request and structured provider response schemas; `core/finance/budget.py` builds evidence and reconciles proposals. Reports and Budget share `services/finance/evidence.py` for owner-scoped snapshots and current rules. The bounded agent loop lives in `core/finance/chat.py`; `core/finance/agent_queries.py` validates tools and calculates results against one interpreted snapshot. `services/ai_tools.py` translates result messages into each provider protocol. Provider-neutral key validation lives in `services/ai_validation.py`; each provider adapter retains its own SDK calls and error handling.
+
+## Finance agent limits
+
+The agent allows three query rounds, at most six executed queries (two per round), then one final-answer call with tools disabled. Results are capped at 8,000 UTF-8 bytes each and 24,000 bytes across the turn. Oversized results are withheld with a request to narrow the query, rather than silently dropping rows or totals. Individual transaction pages contain at most 15 rows; breakdown pages at most 20. Date ranges are whole months, with explicit ranges capped at 240 months. A 75-second orchestration deadline and per-call SDK timeouts cap provider work; automatic SDK retries are disabled for these turns. Unknown tools, account selectors, unsupported filters and invalid ranges return safe tool errors. No arbitrary SQL, network or write tool exists.
+
+Provider protocols: OpenAI Responses function calls replay reasoning/output items with encrypted reasoning and `store=False`; Anthropic uses `tool_use`/`tool_result`; Mistral uses assistant tool calls and matching `tool_call_id` messages. Tests mock provider boundaries; no live financial payload is required for verification. The local demo continues to block external AI calls.

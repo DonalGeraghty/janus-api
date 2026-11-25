@@ -236,22 +236,6 @@ def recommend_meals(context, email, api_key, model):
     return result
 
 
-def finance_chat(system, messages, email, api_key, model):
-    try:
-        with Mistral(api_key=api_key) as client:
-            response = client.chat.complete(
-                model=_normalize_model(model),
-                messages=[{"role": "system", "content": system}] + list(messages),
-                temperature=0,
-            )
-        content = response.choices[0].message.content if response.choices else None
-        if not isinstance(content, str) or not content.strip():
-            raise MistralServiceError("Mistral returned no answer")
-        return content.strip()
-    except (errors.MistralError, httpx.RequestError, ValidationError, json.JSONDecodeError, TypeError) as error:
-        _raise_mapped_mistral_error(error)
-
-
 def finance_budget(system, messages, email, api_key, model):
     from core.finance.budget_models import Proposal
     from .ai_errors import AIResponseValidationError
@@ -266,4 +250,23 @@ def finance_budget(system, messages, email, api_key, model):
     except (ValidationError, json.JSONDecodeError, TypeError):
         raise AIResponseValidationError('The provider returned an invalid budget structure.') from None
     except (errors.MistralError, httpx.RequestError) as error:
+        _raise_mapped_mistral_error(error)
+
+
+def finance_agent_turn(system, messages, tools, email, api_key, model, tools_enabled=True, timeout=20):
+    from .ai_tools import AgentTurn, ToolCall
+    try:
+        with Mistral(api_key=api_key, timeout_ms=int(timeout * 1000)) as client:
+            response = client.chat.complete(model=_normalize_model(model),
+                messages=[{'role': 'system', 'content': system}] + list(messages),
+                tools=[{'type': 'function', 'function': tool} for tool in tools],
+                tool_choice='auto' if tools_enabled else 'none', max_tokens=4000,
+                parallel_tool_calls=False, temperature=0, retries=None, timeout_ms=int(timeout * 1000))
+        if not response.choices or response.choices[0].finish_reason == 'length':
+            raise MistralServiceError('Incomplete finance agent response')
+        message = response.choices[0].message
+        calls = [ToolCall(call.id, call.function.name, call.function.arguments) for call in message.tool_calls or []]
+        return AgentTurn(text=message.content if isinstance(message.content, str) else '', calls=calls,
+                         continuation=[message.model_dump(exclude_unset=True)])
+    except (errors.MistralError, httpx.RequestError, ValidationError, json.JSONDecodeError, TypeError) as error:
         _raise_mapped_mistral_error(error)
