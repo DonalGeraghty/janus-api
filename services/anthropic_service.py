@@ -305,4 +305,16 @@ def finance_chat(system, messages, email, api_key, model=None, max_tokens=4000):
 
 
 def finance_budget(system, messages, email, api_key, model=None):
-    return finance_chat(system, messages, email, api_key, model, max_tokens=10000)
+    from core.finance.budget import Proposal
+    from .ai_errors import AIResponseValidationError
+    try:
+        with Anthropic(api_key=api_key, max_retries=GENERATION_MAX_RETRIES, timeout=GENERATION_TIMEOUT_SECONDS) as client:
+            response = client.messages.parse(model=_model_name(model), max_tokens=10000,
+                system=system, messages=list(messages), output_format=Proposal)
+        if getattr(response, 'stop_reason', None) != 'refusal' and getattr(response, 'parsed_output', None) is None:
+            raise AIResponseValidationError('The provider returned no complete structured budget. Keep the next proposal concise.')
+        return _parsed_response(response, Proposal, 'Anthropic returned no structured budget').model_dump_json()
+    except (ValidationError, json.JSONDecodeError, TypeError):
+        raise AIResponseValidationError('The provider returned an invalid budget structure.') from None
+    except AnthropicError as error:
+        _raise_mapped_anthropic_error(error)

@@ -3,11 +3,11 @@ import calendar
 import json
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import calculations as calc
 from .sheets import parse_date, parse_money
@@ -19,7 +19,23 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
-class Assumption(StrictModel):
+class ForecastModel(StrictModel):
+    @field_validator('amount_eur', 'expected_remaining_eur', 'save_more', 'balanced', 'breathing_room', mode='before', check_fields=False)
+    @classmethod
+    def numeric_money(cls, value):
+        # Some provider parsers supply JSON numbers. Accept exact cents without
+        # relaxing finite/nonnegative/magnitude constraints or guessing locale.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                amount = Decimal(str(value))
+                if amount.is_finite() and amount == amount.quantize(Decimal('0.01')):
+                    return format(amount, 'f')
+            except InvalidOperation:
+                pass
+        return value
+
+
+class Assumption(ForecastModel):
     id: str = Field(min_length=1, max_length=64)
     kind: Literal["income", "bill"]
     label: str = Field(min_length=1, max_length=120)
@@ -32,13 +48,13 @@ class Assumption(StrictModel):
     basis: Literal["history", "seasonal", "user"]
 
 
-class Limits(StrictModel):
+class Limits(ForecastModel):
     save_more: str = Field(pattern=r"^\d{1,8}(\.\d{1,2})?$")
     balanced: str = Field(pattern=r"^\d{1,8}(\.\d{1,2})?$")
     breathing_room: str = Field(pattern=r"^\d{1,8}(\.\d{1,2})?$")
 
 
-class Category(StrictModel):
+class Category(ForecastModel):
     category: str = Field(min_length=1, max_length=120)
     fixed: bool
     expected_remaining_eur: str = Field(pattern=r"^\d{1,8}(\.\d{1,2})?$")
@@ -121,6 +137,7 @@ def build_context(snapshot, rules, today=None):
     context = {"month": month, "today": today.isoformat(), "history_start": start,
                "days_remaining": calendar.monthrange(today.year, today.month)[1] - today.day,
                "latest_transaction_date": latest, "actual": actual, "current_categories": current,
+               "category_catalog": sorted({row['category'] for row in monthly}),
                "monthly_categories": monthly, "merchant_patterns": merchant_rows[:250],
                "recent_transactions": [{"date": row["date"], "category": row["derived"].get("category"),
                                          "type": row["derived"]["type"], "amount_eur": row["derived"]["effective_budget_amount_eur"],
@@ -154,9 +171,11 @@ Forecast ONLY money still to arrive or still to be spent, today through month en
 reserve bills already paid in current transactions, or count existing cash/savings as new income.
 Assumptions list future income and individually expected bills. Each bill is INCLUDED within its
 category's remaining amounts, never added twice. Paid/not_recurring corrections are NOT future bills.
-Honor every correction exactly; retain its id, kind, label, category, amount, date and status.
-Use category names from the evidence; add new categories for justified seasonal needs. Include all
-current categories with spending or refunds, even if no further spend is expected. At most 40
+User corrections are authoritative: do not contradict or duplicate them under another id. The
+server reapplies them after generation; allocate enough for their expected bills.
+Use exact category names from category_catalog; add new categories only for justified seasonal
+needs. Categories describe FUTURE allowances: already-spent categories with no future allowance
+may be omitted; the server always includes recorded spending. At most 40
 categories and 40 assumptions. Keep explanations brief. Remaining amounts are nonnegative EUR
 decimal strings. Each category's save_more <= balanced <= breathing_room. Fixed categories have
 the same remaining amount in all approaches. All approaches must cover the listed future bills;
@@ -173,27 +192,54 @@ def prompt(context, request):
                        "output_schema": Proposal.model_json_schema()}, ensure_ascii=False)
 
 
+def validation_feedback(error):
+    """Safe validation diagnostics: no raw response, financial values or SDK error text."""
+    from pydantic import ValidationError
+    if isinstance(error, ValidationError):
+        return 'Invalid response fields: ' + '; '.join(
+            '.'.join(str(part) for part in item['loc']) + ' (' + item['type'] + ')'
+            for item in error.errors(include_input=False, include_context=False, include_url=False)[:8]
+        )
+    return str(error)
+
+
 def validate_plan(raw, context, request):
     if not isinstance(raw, str) or len(raw.encode("utf-8")) > 60_000:
         raise ValueError("The AI returned an invalid budget proposal. Try updating the plan.")
     text = raw.strip()
-    if text.startswith("```json") and text.endswith("```"):
-        text = text[7:-3].strip()
+    if text.startswith('```') and text.endswith('```'):
+        first, separator, rest = text.partition('\n')
+        if separator and first.lower().strip() in ('```', '```json'):
+            text = rest[:-3].strip()
     proposal = Proposal.model_validate_json(text)
-    assumptions = proposal.assumptions
+    notes = []
+    catalog = context.get('category_catalog', [row['category'] for row in context['current_categories']])
+    canonical = {}
+    for name in catalog:
+        canonical.setdefault(name.casefold(), []).append(name)
+    def category_name(name):
+        candidates = canonical.get(name.casefold(), [])
+        return candidates[0] if len(candidates) == 1 else name
+    assumptions = [item.model_copy(update={'category': category_name(item.category)}) for item in proposal.assumptions]
     if len({a.id for a in assumptions}) != len(assumptions):
         raise ValueError("The proposal repeats an assumption.")
     corrections = {a.id: a for a in request.corrections}
     if len(corrections) != len(request.corrections):
         raise ValueError("An assumption correction is duplicated.")
-    returned = {a.id: a for a in assumptions}
-    for key, correction in corrections.items():
-        if key not in returned or any(getattr(returned[key], field) != getattr(correction, field)
-                                      for field in ("kind", "label", "category", "due_date", "status")) or Decimal(returned[key].amount_eur) != Decimal(correction.amount_eur):
-            raise ValueError("The AI did not apply every corrected assumption. Try updating the plan again.")
+    # The user should never depend on an LLM copying their edit verbatim.
+    # Replace matching IDs and suppress a relabelled duplicate of the same item.
+    def same_payment(a, b):
+        return (a.kind, a.label.casefold(), category_name(a.category).casefold(), a.due_date) == (b.kind, b.label.casefold(), category_name(b.category).casefold(), b.due_date)
+    assumptions = [a for a in assumptions if a.id not in corrections and not any(same_payment(a, c) for c in corrections.values())]
+    assumptions.extend(c.model_copy(update={'category': category_name(c.category)}) for c in corrections.values())
+    if corrections:
+        notes.append('Your edited payment assumptions were applied directly by Janus.')
     bills = defaultdict(Decimal)
     future_income = Decimal(0)
     for assumption in assumptions:
+        if assumption.status != 'expected' and assumption.due_date.strftime('%Y-%m') != context['month']:
+            notes.append('Historical paid/non-recurring payments outside this month were excluded from the forecast.')
+            continue
         if assumption.due_date.strftime("%Y-%m") != context["month"]:
             raise ValueError("A forecast payment falls outside this month.")
         if assumption.status == "expected":
@@ -203,20 +249,27 @@ def validate_plan(raw, context, request):
                 future_income += Decimal(assumption.amount_eur)
             else:
                 bills[assumption.category] += Decimal(assumption.amount_eur)
-    categories = {c.category: c for c in proposal.categories}
+    categories = {category_name(c.category): c.model_copy(update={'category': category_name(c.category)}) for c in proposal.categories}
     if len(categories) != len(proposal.categories):
         raise ValueError("The proposal repeats a category.")
     actuals = {r["category"]: r for r in context["current_categories"]}
-    required = {name for name, row in actuals.items() if Decimal(row["spent_eur"]) or Decimal(row["refunds_eur"])} | set(bills)
-    if not required <= set(categories):
-        raise ValueError("The proposal omitted current spending or an expected bill category.")
+    if not set(bills) <= set(categories):
+        raise ValueError('The proposal omitted a category needed for an expected bill. Include every expected-bill category and reserve its amount in all approaches.')
+    required = {name for name, row in actuals.items() if Decimal(row['spent_eur']) or Decimal(row['refunds_eur'])}
+    missing_actuals = required - set(categories)
+    for name in sorted(missing_actuals):
+        categories[name] = Category(category=name, fixed=False, expected_remaining_eur='0.00',
+            remaining=Limits(save_more='0.00', balanced='0.00', breathing_room='0.00'), confidence='low',
+            reason='Recorded spending included by Janus. The AI proposed no further allowance; review this category if more spending is expected.')
+    if missing_actuals:
+        notes.append(f'{len(missing_actuals)} already-spent category/categories had no further AI allowance. Their actual spending is included; review their limits if more is needed.')
     plans = {mode: [] for mode in MODES}
     for name, category in categories.items():
         values = [Decimal(getattr(category.remaining, mode)) for mode in MODES]
         if values != sorted(values) or category.fixed and len(set(values)) != 1:
-            raise ValueError("The three approaches have inconsistent category limits.")
+            raise ValueError("Category remaining amounts must satisfy save_more <= balanced <= breathing_room; fixed categories must have equal amounts in all three approaches.")
         if min(values) < bills[name] or Decimal(category.expected_remaining_eur) < bills[name]:
-            raise ValueError("The proposal does not reserve enough for an expected bill.")
+            raise ValueError("A category's remaining amounts and expected_remaining_eur are lower than its total expected bills. Include those bills within every approach and forecast, without adding them twice.")
         spent = Decimal(actuals.get(name, {}).get("spent_eur", "0"))
         for mode, remaining in zip(MODES, values):
             plans[mode].append({**category.model_dump(exclude={"remaining"}), "spent_at_creation_eur": money(spent),
@@ -234,7 +287,8 @@ def validate_plan(raw, context, request):
     forecast = available - sum((Decimal(c.expected_remaining_eur) for c in categories.values()), Decimal(0))
     return {"plan_id": uuid4().hex, "month": context["month"], "created_date": context["today"],
             "actual_at_creation": context["actual"],
-            "explanation": proposal.explanation, "assumptions": [a.model_dump(mode="json") for a in assumptions],
+            "explanation": proposal.explanation, "reconciliation_notes": list(dict.fromkeys(notes)),
+            "assumptions": [a.model_dump(mode="json") for a in assumptions if a.due_date.strftime('%Y-%m') == context['month']],
             "future_income_eur": money(future_income), "cushion_eur": money(cushion),
             "forecast_savings_eur": money(forecast), "approaches": modes}
 
