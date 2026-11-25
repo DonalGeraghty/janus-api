@@ -20,7 +20,7 @@ from .ai_errors import (
     AIRateLimitError,
     AIServiceError,
 )
-from .ai_validation import AICredentialValidation, BILLING_REQUIRED
+from .ai_validation import AICredentialValidation, BILLING_REQUIRED, normalize_api_key
 
 
 KEY_VALIDATION_TIMEOUT_MS = 5_000
@@ -65,19 +65,6 @@ def _raise_mapped_mistral_error(error):
     raise MistralServiceError("Mistral request failed") from error
 
 
-def _normalize_api_key(api_key):
-    if not isinstance(api_key, str):
-        raise ValueError("invalid_api_key")
-    api_key = api_key.strip()
-    if (
-        len(api_key) < 20
-        or len(api_key) > 512
-        or any(char.isspace() for char in api_key)
-    ):
-        raise ValueError("invalid_api_key")
-    return api_key
-
-
 def _normalize_model(model):
     if not isinstance(model, str) or not model.strip():
         raise ValueError("model_required")
@@ -97,7 +84,7 @@ def _parsed_response(response, response_type, empty_message):
 def validate_api_key(api_key, email=None):
     """Validate a user-owned key without sending user data or spending tokens."""
 
-    api_key = _normalize_api_key(api_key)
+    api_key = normalize_api_key(api_key)
 
     try:
         with Mistral(
@@ -266,7 +253,7 @@ def finance_chat(system, messages, email, api_key, model):
 
 
 def finance_budget(system, messages, email, api_key, model):
-    from core.finance.budget import Proposal
+    from core.finance.budget_models import Proposal
     from .ai_errors import AIResponseValidationError
     try:
         with Mistral(api_key=api_key) as client:

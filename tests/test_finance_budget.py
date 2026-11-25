@@ -15,11 +15,10 @@ import test_finance_chat_api as chat_fixture
 
 
 def proposal():
-    return {"explanation": "Recent salary covers groceries. Reserve the upcoming bill before flexible spending.",
-            "assumptions": [
+    return {"analysis": {"save_more": "Keep flexible spending tight while protecting the expected bill.", "balanced": "Allow moderate flexible spending, but treat the expected bonus as uncertain.", "breathing_room": "Leave more flexibility for groceries while protecting the expected bill."}, "assumptions": [
                 {"id": "bill", "kind": "bill", "label": "Electricity", "category": "Groceries", "amount_eur": "50.00", "due_date": "2026-11-28", "status": "expected", "confidence": "medium", "evidence": "Illustrative expected bill", "basis": "history"},
                 {"id": "bonus", "kind": "income", "label": "Bonus", "category": "Income", "amount_eur": "1000.00", "due_date": "2026-11-28", "status": "expected", "confidence": "low", "evidence": "An estimate rather than guaranteed income", "basis": "history"}],
-            "categories": [{"category": "Groceries", "fixed": False, "expected_remaining_eur": "120.00", "remaining": {"save_more": "60.00", "balanced": "90.00", "breathing_room": "120.00"}, "confidence": "medium", "reason": "Protect the bill and adjust flexible spending."}]}
+            "categories": [{"category": "Groceries", "fixed": False, "remaining": {"save_more": "60.00", "balanced": "90.00", "breathing_room": "120.00"}, "confidence": "medium", "reason": "Protect the bill and adjust flexible spending."}]}
 
 
 class FinanceBudgetTests(unittest.TestCase):
@@ -63,19 +62,35 @@ class FinanceBudgetTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/finance/budget/context", headers=self.harness.other).status_code, 403)
 
     def test_plans_reconcile_and_use_user_provider(self):
-        response = self.plan({"notes": "Christmas gifts are already bought.", "cushion_eur": "100.00"})
+        response = self.plan()
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         body = response.get_json()
         plan = body["plan"]
-        self.assertEqual(plan["approaches"]["balanced"]["projected_savings_eur"], "4827.66")
         self.assertEqual(plan["approaches"]["balanced"]["categories"][0]["limit_eur"], "172.34")
         self.assertEqual(plan["future_income_eur"], "1000.00")
+        for mode in budget.MODES:
+            self.assertEqual(plan["approaches"][mode]["analysis"], proposal()["analysis"][mode])
         prompt = self.plan_mock.call_args.args[1][0]["content"]
-        self.assertIn("Christmas gifts are already bought", prompt)
+        self.assertNotIn("user_context", json.loads(prompt))
+        self.assertNotIn("forecast_eur", plan["approaches"]["balanced"]["categories"][0])
         self.assertIn("Ignore previous instructions", prompt)
         self.assertEqual(body["meta"]["provider"], "openai")
         self.assertIn("privacy", body["meta"])
+
+    def test_analysis_is_bounded_required_and_normalized_to_one_paragraph(self):
+        raw = proposal()
+        raw['analysis']['balanced'] = 'One sentence.\n\nAnother sentence.'
+        context = self.context()['context']
+        plan = budget.validate_plan(json.dumps(raw), context)
+        self.assertEqual(plan['approaches']['balanced']['analysis'], 'One sentence. Another sentence.')
+        for invalid in ('', ' ' * 10, 'x' * 401):
+            raw['analysis']['balanced'] = invalid
+            with self.assertRaises(ValueError):
+                budget.validate_plan(json.dumps(raw), context)
+        del raw['analysis']['balanced']
+        with self.assertRaises(ValueError):
+            budget.validate_plan(json.dumps(raw), context)
 
     def test_missing_key_invalid_input_and_provider_error(self):
         self.harness.has_credential = False
@@ -98,17 +113,10 @@ class FinanceBudgetTests(unittest.TestCase):
             self.plan_mock.return_value = json.dumps(p)
             self.assertEqual(self.plan().status_code, 422)
 
-    def test_paid_corrections_remove_future_income_and_must_be_honored(self):
-        correction = proposal()["assumptions"][1]
-        correction["status"] = "paid"
-        body = {"corrections": [correction]}
-        corrected = self.plan(body)
-        self.assertEqual(corrected.status_code, 200)
-        self.assertEqual(corrected.get_json()["plan"]["future_income_eur"], "0.00")
-        p = proposal()
-        p["assumptions"][1] = correction
-        self.plan_mock.return_value = json.dumps(p)
-        self.assertEqual(self.plan(body).get_json()["plan"]["future_income_eur"], "0.00")
+    def test_retired_planner_inputs_are_rejected_before_provider_call(self):
+        for body in ({"notes": "A trip"}, {"cushion_eur": "100"}, {"corrections": []}):
+            self.assertEqual(self.plan(body).status_code, 400)
+        self.plan_mock.assert_not_called()
 
     def test_failed_sync_and_inflight_replacement_cannot_publish_plan(self):
         from services.firebase import db_state
@@ -121,10 +129,6 @@ class FinanceBudgetTests(unittest.TestCase):
             return json.dumps(proposal())
         self.plan_mock.side_effect = replace
         self.assertEqual(self.plan().status_code, 409)
-
-    def test_funding_gap_is_explicit_and_no_cash_is_added(self):
-        body = self.plan({"cushion_eur": "5000"}).get_json()
-        self.assertEqual(body["plan"]["approaches"]["balanced"]["funding_gap_eur"], "172.34")
 
     def test_demo_is_explicit_and_never_calls_provider(self):
         with patch.dict(app.config, LOCAL_DEMO=True):
@@ -163,10 +167,9 @@ class FinanceBudgetTests(unittest.TestCase):
         row = response.json['plan']['approaches']['balanced']['categories'][0]
         self.assertEqual(row['limit_eur'], '82.34')
         self.assertEqual(row['remaining_at_creation_eur'], '0.00')
-        self.assertTrue(response.json['plan']['reconciliation_notes'])
+        self.assertIn('no further allowance', row['reason'])
         raw = proposal()
         raw['categories'][0]['category'] = 'groceries'
-        raw['categories'][0]['expected_remaining_eur'] = 120
         raw['categories'][0]['remaining']['balanced'] = 90.0
         self.plan_mock.return_value = json.dumps(raw)
         response = self.plan()

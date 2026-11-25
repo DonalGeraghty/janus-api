@@ -22,6 +22,9 @@ from .ai_contract import (
     MEAL_RECOMMENDATION_PROMPT,
     MealAnalysis,
     MealRecommendation,
+    HabitDraftResponse,
+    HABIT_DRAFT_PROMPT,
+    habit_draft_message,
 )
 from .ai_errors import (
     AIAuthenticationError,
@@ -31,7 +34,6 @@ from .ai_errors import (
     AIServiceError,
 )
 from .ai_validation import AICredentialValidation, BILLING_REQUIRED
-from .ai_contract import HabitDraftResponse, HABIT_DRAFT_PROMPT, habit_draft_message
 
 
 KEY_VALIDATION_TIMEOUT_SECONDS = 5.0
@@ -296,7 +298,7 @@ def finance_chat(system, messages, email, api_key, model=None):
 
 
 def finance_budget(system, messages, email, api_key, model=None):
-    from core.finance.budget import Proposal
+    from core.finance.budget_models import Proposal
     from .ai_errors import AIResponseValidationError
     try:
         response = OpenAI(api_key=api_key).responses.parse(

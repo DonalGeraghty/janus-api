@@ -26,7 +26,7 @@ from .ai_errors import (
     AIRateLimitError,
     AIServiceError,
 )
-from .ai_validation import AICredentialValidation, BILLING_REQUIRED
+from .ai_validation import AICredentialValidation, BILLING_REQUIRED, normalize_api_key
 
 
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
@@ -77,19 +77,6 @@ def _raise_mapped_anthropic_error(error):
     raise AnthropicServiceError("Anthropic request failed") from error
 
 
-def _normalize_api_key(api_key):
-    if not isinstance(api_key, str):
-        raise ValueError("invalid_api_key")
-    api_key = api_key.strip()
-    if (
-        len(api_key) < 20
-        or len(api_key) > 512
-        or any(char.isspace() for char in api_key)
-    ):
-        raise ValueError("invalid_api_key")
-    return api_key
-
-
 def _model_name(model=None):
     candidate = model if model is not None else os.environ.get(
         "ANTHROPIC_MODEL",
@@ -119,7 +106,7 @@ def _parsed_response(response, response_type, empty_message):
 def validate_api_key(api_key, email=None, model=None):
     """Validate a user-owned key without sending user data or generating output."""
 
-    api_key = _normalize_api_key(api_key)
+    api_key = normalize_api_key(api_key)
 
     try:
         with Anthropic(
@@ -305,7 +292,7 @@ def finance_chat(system, messages, email, api_key, model=None, max_tokens=4000):
 
 
 def finance_budget(system, messages, email, api_key, model=None):
-    from core.finance.budget import Proposal
+    from core.finance.budget_models import Proposal
     from .ai_errors import AIResponseValidationError
     try:
         with Anthropic(api_key=api_key, max_retries=GENERATION_MAX_RETRIES, timeout=GENERATION_TIMEOUT_SECONDS) as client:

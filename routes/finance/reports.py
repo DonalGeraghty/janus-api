@@ -4,7 +4,8 @@ from flask import g, jsonify, request
 
 from core.finance import calculations as finance_calc
 from services.finance import sync as finance_sync
-from services.firebase.finance.rules import FinanceError, list_rules as list_rule_docs
+from services.firebase.finance.rules import FinanceError
+from services.finance.evidence import snapshot_and_rules
 from .shared import blueprint
 
 
@@ -18,16 +19,6 @@ def ledger_sync():
 def ledger_sync_status():
     identity = g.finance_identity
     return jsonify(status="success", sync=finance_sync.sync_status(identity["email"], identity["account_id"]))
-
-
-def _snapshot_and_rules(identity):
-    snapshot = finance_sync.get_snapshot(identity["email"], identity["account_id"])
-    if snapshot is None:
-        raise FinanceError("Sync the ledger first (POST /api/finance/sync).", 409, details={"code": "sync_required"})
-    rule_set = list_rule_docs(identity["email"], identity["account_id"], scope="janus", status="active")
-    # Reports apply the current imported rules, independently of the Sheets import.
-    # Describe that exact rule set without mutating the cached source snapshot.
-    return {**snapshot, "rule_set_version": rule_set["rule_set_version"]}, rule_set["rules"]
 
 
 def _period():
@@ -53,7 +44,7 @@ def _meta(snapshot):
 
 
 def _rows(identity):
-    snapshot, rules = _snapshot_and_rules(identity)
+    snapshot, rules = snapshot_and_rules(identity)
     return snapshot, finance_calc.derive_rows(rules, snapshot["rows"])
 
 
@@ -139,7 +130,7 @@ def trends():
 @blueprint.get("/net-worth")
 def net_worth():
     identity = g.finance_identity
-    snapshot, _rules = _snapshot_and_rules(identity)
+    snapshot, _rules = snapshot_and_rules(identity)
     return jsonify(status="success", meta=_meta(snapshot), net_worth=finance_calc.parse_net_worth(snapshot.get("snapshot_grid")))
 
 
@@ -153,6 +144,6 @@ def sinking_funds():
 @blueprint.get("/budgets")
 def budgets():
     identity = g.finance_identity
-    snapshot, _rules = _snapshot_and_rules(identity)
+    snapshot, _rules = snapshot_and_rules(identity)
     return jsonify(status="success", meta=_meta(snapshot),
                    budgets={"available": False, "reason": "No confirmed budget tab in the ledger; budget charts stay hidden until verified budget data exists."})

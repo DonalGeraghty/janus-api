@@ -12,12 +12,13 @@ from services.ai_errors import AIAuthenticationError, AIAuthorizationError, AIBi
 from services.credential_service import CredentialConfigurationError, CredentialEncryptionError, decrypt_api_key
 from services.finance import sync
 from services.firebase.finance.rules import FinanceError
-from .reports import _snapshot_and_rules
+from core.finance.budget_models import PlanRequest
+from services.finance.evidence import snapshot_and_rules
 from .shared import blueprint
 
 
 def _evidence(identity):
-    snapshot, rules = _snapshot_and_rules(identity)
+    snapshot, rules = snapshot_and_rules(identity)
     try:
         context = planner.build_context(snapshot, rules)
     except ValueError as error:
@@ -37,22 +38,14 @@ def budget_context():
 def budget_plan():
     identity = g.finance_identity
     try:
-        body = planner.PlanRequest.model_validate(request.get_json(silent=True) or {})
+        PlanRequest.model_validate(request.get_json(silent=True) or {})
     except ValidationError:
-        return jsonify(status="error", error="invalid_budget_request", message="Check the notes, cash cushion and corrected assumptions."), 400
+        return jsonify(status="error", error="invalid_budget_request", message="Budget assessment takes no planning inputs."), 400
     snapshot, context, meta = _evidence(identity)
     if meta["stale"]:
         return jsonify(status="error", error="budget_stale_data", message="Import the latest data in Account before assessing a new plan. Your existing plan is retained."), 409
-    if len({item.id for item in body.corrections}) != len(body.corrections) or any(
-        item.due_date.strftime('%Y-%m') != context['month'] or
-        item.status == 'expected' and item.due_date.isoformat() < context['today']
-        for item in body.corrections
-    ):
-        return jsonify(status='error', error='invalid_budget_request',
-                       message='Check that payment corrections have unique IDs and dates in this month. For a payment still expected, use today or a future expected payment date.'), 400
-
     def ensure_current_evidence():
-        current_snapshot, _rules = _snapshot_and_rules(identity)
+        current_snapshot, _rules = snapshot_and_rules(identity)
         current_status = sync.sync_status(identity['email'], identity['account_id'])
         if current_status.get('stale') or current_snapshot['snapshot_id'] != snapshot['snapshot_id'] or current_snapshot['rule_set_version'] != snapshot['rule_set_version']:
             raise FinanceError('Your imported data or rules changed during assessment. Update the plan again.', 409,
@@ -71,16 +64,16 @@ def budget_plan():
                                   aad_version=stored_credential_aad_version(selection['provider'], credential))
         except (CredentialConfigurationError, CredentialEncryptionError):
             return jsonify(status='error', error='credential_service_unavailable', message='Secure credential storage is unavailable.'), 503
-    messages = [{'role': 'user', 'content': planner.prompt(context, body)}]
+    messages = [{'role': 'user', 'content': planner.prompt(context)}]
     attempts = 1 if demo else 2
     reason = ''
     for attempt in range(attempts):
         ensure_current_evidence()
         try:
-            raw = planner.demo_proposal(context, body.corrections) if demo else ai_service.finance_budget(
+            raw = planner.demo_proposal(context) if demo else ai_service.finance_budget(
                 planner.SYSTEM_PROMPT, messages, identity['email'], key, selection['provider'], selection['model'])
             ensure_current_evidence()
-            plan = planner.validate_plan(raw, context, body)
+            plan = planner.validate_plan(raw, context)
             return jsonify(status='success', plan=plan, context=context,
                 meta={**meta, **selection, 'generated_at': datetime.now(timezone.utc).isoformat(),
                       'privacy': PRIVACY_NOTE, 'demo': demo, 'repair_attempted': attempt > 0})
@@ -98,5 +91,5 @@ def budget_plan():
                 'The previous proposal did not pass validation. Return a corrected complete proposal using the same evidence. '
                 'Validation feedback (DATA): ' + reason[:1500]}]
     return jsonify(status='error', error='budget_invalid_proposal',
-        message='The provider could not produce a consistent budget after an automatic repair attempt. Your previous plan is retained. Try again or adjust the payment assumptions.',
+        message='The provider could not produce a consistent budget after an automatic repair attempt. Your previous plan is retained. Try updating with AI again.',
         validation_reason=reason[:1000]), 422
