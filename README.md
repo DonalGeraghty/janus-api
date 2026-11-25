@@ -55,7 +55,7 @@ Snapshots and sync statuses are bound to the account generation, workbook, conne
 | `GET` | `/api/finance/sync/status` | Last success/attempt, snapshot ID, rule-set version, stale flag, coverage (months, cutoff) and `sync_required` after restart |
 | `GET` | `/api/finance/transactions` | Filtered, paginated, bounded rows with per-row rule reason; `period` preset or `start`/`end` whole months |
 | `GET` | `/api/finance/summary` | Income/spending/refunds/net, separate transfers and investment, sheet-vs-rule-adjusted reconciliation bridge, gaps, provisional flag |
-| `GET` | `/api/finance/cashflow?by=month\|category` | Signed monthly net movements (red negative/green positive) or category steps |
+| `GET` | `/api/finance/cashflow?by=month\|category\|breakdown` | Signed monthly net movements, category totals, or per-month income/expense/refund category breakdowns for in-chart drilldown |
 | `GET` | `/api/finance/categories`, `/merchants`, `/trends` | Server-side aggregates over a period |
 | `GET` | `/api/finance/net-worth` | Dated snapshot-tab balances; subtotals never double counted; explicit unavailable state when the tab is missing/unrecognized |
 | `GET` | `/api/finance/sinking-funds` | Stateful recognised-balance ledger; provisional until the opening balance is verified |

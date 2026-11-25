@@ -382,6 +382,17 @@ def _budget_rows(rows, start, end):
 def cashflow(derived_rows, start, end, by="month"):
     if by == "month":
         return [{"month": r["month"], "net": r["net"]} for r in trends(derived_rows, start, end)]
+    if by == "breakdown":
+        months = {}
+        for row in _budget_rows(derived_rows, start, end):
+            d = row["derived"]
+            group = months.setdefault(row["month"], {})
+            key = (d["type"], d.get("category") or "Uncategorised")
+            group[key] = group.get(key, Decimal("0")) + _dec(d["effective_budget_amount_eur"])
+        return [{"month": month, "items": [
+            {"type": kind, "category": category, "amount_eur": _money(amount)}
+            for (kind, category), amount in sorted(groups.items())
+        ]} for month, groups in sorted(months.items())]
     groups = {}
     for row in _budget_rows(derived_rows, start, end):
         d = row["derived"]

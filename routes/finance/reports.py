@@ -106,8 +106,8 @@ def cashflow():
     snapshot, rows = _rows(identity)
     start, end = _period()
     by = request.args.get("by", "month")
-    if by not in ("month", "category"):
-        raise FinanceError("by must be 'month' or 'category'", 400)
+    if by not in ("month", "category", "breakdown"):
+        raise FinanceError("by must be 'month', 'category' or 'breakdown'", 400)
     return jsonify(status="success", meta=_meta(snapshot), period={"start": start, "end": end},
                    cashflow=finance_calc.cashflow(rows, start, end, by))
 
