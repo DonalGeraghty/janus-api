@@ -7,11 +7,11 @@ are always reported next to the unmodified sheet baseline (reconciliation bridge
 """
 
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from .finance_rules import active_executable_rules, rule_matches
+from .finance_rules import ACTION_EFFECTS, action_value_error, active_executable_rules, matching_rule_effects
 
 
 DUBLIN = ZoneInfo("Europe/Dublin")
@@ -99,32 +99,42 @@ def _money(value):
     return format(value.quantize(CENT), "f")
 
 
-def apply_rules(rules, row):
-    """First matching active executable janus rule wins (priority desc, rule_id asc)."""
-    for rule in active_executable_rules(rules):
-        if rule_matches(rule, row):
-            return rule
-    return None
-
-
 def derive_rows(rules, rows):
     """Attach a derived interpretation to each row. Source fields are never rewritten."""
+    active = active_executable_rules(rules)
     derived = []
     for original in rows:
         row = classify_event(original)
-        outcome = apply_rules(rules, row)
+        _matches, selected = matching_rule_effects(active, row)
+        accounting = next((r for r in selected if ACTION_EFFECTS[r["action"]] == "accounting"), None)
+        outcome = accounting or (selected[0] if selected else None)
         excluded = outcome is not None and outcome["action"] == "exclude"
-        # Generic transfer rules must not suppress an explicitly identified contribution or release.
-        if excluded and outcome.get("field") == "type" and row.get("type") == "Transfer" and row.get("event_type") in ("sinking_contribution_outgoing", "sinking_release"):
-            excluded = False
         if row.get("include_provisional_totals") != "YES":
             excluded = True
         base_type = row.get("type")
-        if outcome is not None and outcome["action"] == "classify":
-            base_type = outcome["action_value"].split(":")[0] or row.get("type")
         category = row.get("category")
-        if outcome is not None and outcome["action"] == "set_category":
-            category = outcome["action_value"]
+        warnings = []
+        if accounting:
+            action = accounting["action"]
+            if action_value_error(accounting):
+                warnings.append("invalid_rule_action_value")
+            elif action == "classify":
+                base_type, separator, assigned_category = accounting["action_value"].partition(":")
+                if separator:
+                    category = assigned_category.strip()
+            elif (action == "reverse" and (row.get("event_type") != "sinking_release"
+                                           or row.get("fund_purpose") not in SINKING_PURPOSES | {"shared_sinking_fund"}
+                                           or _dec(row.get("amount_eur")) <= 0)
+                  or action == "allocate" and (row.get("event_type") != "covered_sinking_bill"
+                                               or row.get("fund_purpose") not in SINKING_PURPOSES
+                                               or _dec(row.get("amount_eur")) >= 0)):
+                warnings.append("rule_context_not_supported")
+        category_rule = next((r for r in selected if r["action"] == "set_category"), None)
+        if category_rule:
+            if action_value_error(category_rule):
+                warnings.append("invalid_rule_action_value")
+            else:
+                category = category_rule["action_value"]
         derived.append({
             **row,
             "derived": {
@@ -133,7 +143,9 @@ def derive_rows(rules, rows):
                 "action_value": outcome["action_value"] if outcome else "",
                 "excluded": excluded,
                 "exclusion_reason": ("sheet_inclusion_not_yes" if row.get("include_provisional_totals") != "YES" else "rule_exclusion") if excluded else None,
-                "review": outcome is not None and outcome["action"] == "flag",
+                "applied_rules": [{key: r.get(key, "") for key in ("rule_id", "action", "action_value")} for r in selected],
+                "review": bool(warnings) or any(r["action"] == "flag" for r in selected),
+                "warnings": warnings,
                 "type": base_type,
                 "category": category,
             },
@@ -250,6 +262,9 @@ def classify_event(original):
             event = "sinking_payment_transfer"
     elif kind == "Transfer":
         event = "investment_principal_transfer" if "degiro" in text or "dejiro" in text else "internal_transfer"
+    if event is None:
+        event = {"Income": "external_income", "Expense": "ordinary_expense",
+                 "Refund": "merchant_refund_or_reimbursement"}.get(kind)
     if event:
         row["event_type"] = event
     if purpose:
@@ -309,6 +324,10 @@ def canonicalize(rows):
                 effective = amount
         d.update(effective_budget_amount_eur=_money(effective), investment_amount_eur=_money(investment),
                  transfer_amount_eur=_money(transfer))
+        if (not d["excluded"] and d["action"] == "reverse" and event == "sinking_release"
+                and amount > effective):
+            d["warnings"].append("unrecognised_release_amount")
+            d["review"] = True
     return rows
 
 

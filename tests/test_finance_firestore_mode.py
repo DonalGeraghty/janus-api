@@ -111,7 +111,7 @@ class FinanceFirestoreModeTests(unittest.TestCase):
     def test_full_finance_flow_over_firestore_path(self):
         # connect
         result = self.client.put("/api/finance/connection", headers=self.headers,
-                                 json={"access_token": "ya29.synthetic-token-abcdef1234", "workbook_id": "1RUiRPyU2DnoXe5Tbhd6BZXMCdJtxg7FP3UQwCd2i_e0"})
+                                 json={"access_token": "ya29.synthetic-token-abcdef1234", "workbook_id": "synthetic_finance_workbook_0123456789abcdef"})
         self.assertEqual(result.status_code, 200, result.get_json())
         self.assertTrue(result.get_json()["connection"]["connected"])
         # status readable

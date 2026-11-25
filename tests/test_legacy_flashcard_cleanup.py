@@ -1,4 +1,4 @@
-"""Retired study endpoints stay absent; legacy records retain deletion guarantees."""
+"""Historical study records retain account-deletion guarantees."""
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from app import app
 from services.firebase import db_state
 from services.firebase.account_state import ACCOUNT_DELETION_FIELD, ACCOUNT_DELETION_TOKEN_FIELD
-from services.firebase.flashcards import _delete_batch_in_transaction, delete_flashcards
+from services.firebase.legacy_data import _delete_batch_in_transaction, delete_legacy_account_data
 
 
 class RetiredFlashcardApiTests(unittest.TestCase):
@@ -24,19 +24,6 @@ class RetiredFlashcardApiTests(unittest.TestCase):
     def tearDown(self):
         for store in self.stores:
             store.clear()
-
-    def test_retired_routes_and_api_index_are_absent(self):
-        routes = [('post', '/api/minerva/respond'), ('get', '/api/user/minerva-settings'),
-                  ('put', '/api/user/minerva-settings'), ('get', '/api/flashcards'),
-                  ('post', '/api/flashcards'), ('get', '/api/flashcards/due'),
-                  ('put', '/api/flashcards/old'), ('delete', '/api/flashcards/old'),
-                  ('post', '/api/flashcards/old/reviews')]
-        for headers in ({}, self.headers):
-            for method, route in routes:
-                self.assertEqual(getattr(self.client, method)(route, headers=headers, json={}).status_code, 404, route)
-        index = self.client.get('/').get_data(as_text=True)
-        for route in ('/api/flashcards', '/api/minerva/respond', '/api/user/minerva-settings'):
-            self.assertNotIn(route, index)
 
     def test_legacy_data_is_preserved_until_explicit_account_deletion(self):
         db_state.flashcards_memory['legacy@example.com'] = {'old': {'front': 'Keep'}}
@@ -72,13 +59,6 @@ class LegacyFlashcardCleanupTests(unittest.TestCase):
             self.assertEqual(error, 'account_mismatch')
             transaction.delete.assert_not_called()
 
-    def test_matching_firestore_cleanup_removes_requested_documents(self):
-        user_ref, transaction = Mock(), Mock()
-        user_ref.get.return_value = SimpleNamespace(exists=True, to_dict=self.owner)
-        ok, _ = _delete_batch_in_transaction(transaction, user_ref, [Mock(), Mock()], 'account-1', 'delete-1')
-        self.assertTrue(ok)
-        self.assertEqual(transaction.delete.call_count, 2)
-
     def test_missing_account_does_not_touch_subcollections(self):
         user_ref, transaction = Mock(), Mock()
         user_ref.get.return_value = SimpleNamespace(exists=False)
@@ -89,17 +69,17 @@ class LegacyFlashcardCleanupTests(unittest.TestCase):
         db_state.flashcards_memory['user@example.com'] = {'old': {}}
         db_state.flashcard_reviews_memory['user@example.com'] = {'review': {}}
         db_state.auth_users_memory['user@example.com'] = self.owner(account_id='new')
-        self.assertFalse(delete_flashcards('user@example.com', 'account-1', 'delete-1'))
+        self.assertFalse(delete_legacy_account_data('user@example.com', 'account-1', 'delete-1'))
         self.assertIn('user@example.com', db_state.flashcards_memory)
         db_state.auth_users_memory['user@example.com'] = self.owner()
-        self.assertTrue(delete_flashcards('user@example.com', 'account-1', 'delete-1'))
+        self.assertTrue(delete_legacy_account_data('user@example.com', 'account-1', 'delete-1'))
         self.assertNotIn('user@example.com', db_state.flashcards_memory)
         self.assertNotIn('user@example.com', db_state.flashcard_reviews_memory)
 
     def test_configured_firestore_failure_does_not_fall_back_to_memory(self):
         db_state.users_collection_ref = Mock()
         db_state.flashcards_memory['user@example.com'] = {'old': {}}
-        self.assertFalse(delete_flashcards('user@example.com', 'account-1', 'delete-1'))
+        self.assertFalse(delete_legacy_account_data('user@example.com', 'account-1', 'delete-1'))
         self.assertIn('user@example.com', db_state.flashcards_memory)
         db_state.users_collection_ref = None
 

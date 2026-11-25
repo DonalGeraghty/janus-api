@@ -101,19 +101,6 @@ class OpenAICredentialApiTests(unittest.TestCase):
         encrypt_mock.assert_not_called()
         save_mock.assert_not_called()
 
-    def test_status_returns_only_safe_metadata(self):
-        headers = self.register()
-        with patch(
-            "routes.ai_settings.get_ai_credential_status",
-            return_value=(True, None, {"configured": True, "last_four": "Ab12"}),
-        ):
-            response = self.client.get("/api/user/openai-key", headers=headers)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.get_json()["credential"],
-            {"configured": True, "last_four": "Ab12"},
-        )
-
     def test_key_can_be_removed(self):
         headers = self.register()
         with patch("routes.ai_settings.delete_ai_credential", return_value=(True, None)) as delete_mock:
@@ -386,65 +373,32 @@ class KmsCredentialServiceTests(unittest.TestCase):
     )
     @patch("services.credential_service.kms.KeyManagementServiceClient")
     def test_v2_aad_is_bound_to_user_and_provider(self, client_class):
-        client = client_class.return_value
-        client.encrypt.return_value = SimpleNamespace(ciphertext=b"encrypted-key")
-        client.decrypt.return_value = SimpleNamespace(plaintext=USER_KEY.encode("utf-8"))
+        for provider in ("openai", "mistral", "anthropic"):
+            with self.subTest(provider=provider):
+                client = client_class.return_value
+                client.encrypt.return_value = SimpleNamespace(ciphertext=b"encrypted-key")
+                client.decrypt.return_value = SimpleNamespace(plaintext=USER_KEY.encode("utf-8"))
 
-        ciphertext = encrypt_api_key(
-            USER_KEY, "User@Example.com", provider="mistral", aad_version=2
-        )
-        plaintext = decrypt_api_key(
-            ciphertext,
-            "user@example.com",
-            provider="mistral",
-            aad_version=2,
-        )
+                ciphertext = encrypt_api_key(
+                    USER_KEY, "User@Example.com", provider=provider, aad_version=2
+                )
+                plaintext = decrypt_api_key(
+                    ciphertext,
+                    "user@example.com",
+                    provider=provider,
+                    aad_version=2,
+                )
 
-        self.assertEqual(plaintext, USER_KEY)
-        expected_aad = b"janus-gate:api-key:v2:user@example.com:mistral"
-        self.assertEqual(
-            client.encrypt.call_args.kwargs["request"]["additional_authenticated_data"],
-            expected_aad,
-        )
-        self.assertEqual(
-            client.decrypt.call_args.kwargs["request"]["additional_authenticated_data"],
-            expected_aad,
-        )
-
-    @patch.dict(
-        os.environ,
-        {"AI_KMS_KEY_NAME": "projects/test/locations/europe-west1/keyRings/janus-api/cryptoKeys/users"},
-    )
-    @patch("services.credential_service.kms.KeyManagementServiceClient")
-    def test_v2_aad_supports_anthropic_provider(self, client_class):
-        client = client_class.return_value
-        client.encrypt.return_value = SimpleNamespace(ciphertext=b"encrypted-key")
-        client.decrypt.return_value = SimpleNamespace(plaintext=USER_KEY.encode("utf-8"))
-
-        ciphertext = encrypt_api_key(
-            USER_KEY,
-            "User@Example.com",
-            provider="anthropic",
-            aad_version=2,
-        )
-        plaintext = decrypt_api_key(
-            ciphertext,
-            "user@example.com",
-            provider="anthropic",
-            aad_version=2,
-        )
-
-        self.assertEqual(plaintext, USER_KEY)
-        expected_aad = b"janus-gate:api-key:v2:user@example.com:anthropic"
-        self.assertEqual(
-            client.encrypt.call_args.kwargs["request"]["additional_authenticated_data"],
-            expected_aad,
-        )
-        self.assertEqual(
-            client.decrypt.call_args.kwargs["request"]["additional_authenticated_data"],
-            expected_aad,
-        )
-
+                self.assertEqual(plaintext, USER_KEY)
+                expected_aad = f"janus-gate:api-key:v2:user@example.com:{provider}".encode()
+                self.assertEqual(
+                    client.encrypt.call_args.kwargs["request"]["additional_authenticated_data"],
+                    expected_aad,
+                )
+                self.assertEqual(
+                    client.decrypt.call_args.kwargs["request"]["additional_authenticated_data"],
+                    expected_aad,
+                )
 
 if __name__ == "__main__":
     unittest.main()

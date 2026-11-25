@@ -22,7 +22,7 @@ RULE = {
 }
 
 TOKEN = "ya29.synthetic-google-token-0123456789abcdef"
-WORKBOOK = "1RUiRPyU2DnoXe5Tbhd6BZXMCdJtxg7FP3UQwCd2i_e0"
+WORKBOOK = "synthetic_finance_workbook_0123456789abcdef"
 
 
 class FinanceRulesApiTests(unittest.TestCase):
@@ -149,10 +149,18 @@ class FinanceRulesApiTests(unittest.TestCase):
     def test_rule_payload_validation(self):
         for bad in [{**RULE, "action": "eval"}, {**RULE, "operator": "regex"},
                     {**RULE, "priority": 10**9}, {**RULE, "rule_id": "bad id!"},
-                    {**RULE, "extra": 1}, {**RULE, "status": "deleted"}]:
+                    {**RULE, "extra": 1}, {**RULE, "status": "deleted"},
+                    {**RULE, "action_value": "NotAType"}, {**RULE, "action_value": "Expense:"},
+                    {**RULE, "action": "set_category", "action_value": ""},
+                    {**RULE, "action": "reverse", "action_value": "flip_any_amount"}]:
             result = self.client.post("/api/finance/rules", headers=self.headers, json=bad)
             self.assertEqual(result.status_code, 400, bad)
         self.assertEqual(self.client.put("/api/finance/rules/T01", headers=self.headers, json={"name": "No revision"}).status_code, 400)
+        self.create()
+        for changes in ({"action": "reverse"}, {"action_value": "Unknown"}, {"field": "*"}):
+            result = self.client.put("/api/finance/rules/T01", headers=self.headers, json={"revision": 1, **changes})
+            self.assertEqual(result.status_code, 400, changes)
+        self.assertEqual(self.client.get("/api/finance/rules", headers=self.headers).json["rule_set_version"], 1)
 
     def test_csv_import_preview_then_commit_is_atomic_and_versioned(self):
         preview = self.client.post("/api/finance/rules/import", headers=self.headers, json={"csv": CSV_SEED, "mode": "preview"}).get_json()
@@ -185,9 +193,10 @@ class FinanceRulesApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/finance/rules/import", headers=self.headers, json={"csv": bad_header}).status_code, 400)
 
         unsupported = ("rule_id,scope,name,type,field,operator,value,action,action_value,priority,status,source_section,description\r\n"
-                       "X01,janus,Unknown,accounting,event_type,equals,x,drop_everything,,10,active,,unknown action\r\n")
+                       "X01,janus,Unknown,accounting,event_type,equals,x,drop_everything,,10,active,,unknown action\r\n"
+                       "X02,janus,Bad type,accounting,event_type,equals,x,classify,Unknown,10,active,,invalid action value\r\n")
         preview = self.client.post("/api/finance/rules/import", headers=self.headers, json={"csv": unsupported, "mode": "preview"}).get_json()
-        self.assertEqual(len(preview["held"]), 1)
+        self.assertEqual(len(preview["held"]), 2)
         commit = self.client.post("/api/finance/rules/import", headers=self.headers, json={"csv": unsupported, "mode": "commit"}).get_json()
         rule = self.client.get("/api/finance/rules", headers=self.headers).get_json()["rules"][0]
         self.assertEqual(rule["status"], "review")
@@ -236,6 +245,10 @@ class FinanceRulesApiTests(unittest.TestCase):
         self.assertEqual(result["results"][1]["matches"][0]["rule_id"], "T02")
         self.assertEqual(self.client.post("/api/finance/rules/test", headers=self.headers, json={"rows": []}).status_code, 400)
         self.assertEqual(self.client.post("/api/finance/rules/test", headers=self.headers, json={"rows": [{"event_type": "x"}] * 101}).status_code, 400)
+        for invalid_row in ({"amount_eur": "NaN"}, {"amount_eur": "1e1000"},
+                            {"type": []}, {"date": 5}, {"row": "one"}):
+            response = self.client.post("/api/finance/rules/test", headers=self.headers, json={"rows": [invalid_row]})
+            self.assertEqual(response.status_code, 400, invalid_row)
 
     def test_history_lists_versions_and_restore_reverts_the_rule_set(self):
         self.create()

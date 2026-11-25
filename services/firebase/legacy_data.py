@@ -1,4 +1,4 @@
-"""Legacy flashcard cleanup during account deletion; no active flashcard API."""
+"""Guarded account-deletion cleanup for records from retired integrations."""
 
 from firebase_admin import firestore
 from . import db_state
@@ -7,12 +7,9 @@ from .core import normalize_user_email
 from ..logging_service import logger
 
 
-def _cards_collection(email_key):
-    return db_state.users_collection_ref.document(email_key).collection("flashcards")
-
-
-def _reviews_collection(email_key):
-    return db_state.users_collection_ref.document(email_key).collection("flashcard_reviews")
+# Stored paths must remain known until historical accounts have been deleted.
+LEGACY_COLLECTIONS = ("flashcards", "flashcard_reviews", "garmin_cache", "garmin_settings")
+LEGACY_PRIVATE_DOCUMENTS = ("garmin",)
 
 
 def _delete_batch_in_transaction(
@@ -37,7 +34,7 @@ def _delete_batch_in_transaction(
     return True, None
 
 
-def delete_flashcards(email, expected_account_id, deletion_token):
+def delete_legacy_account_data(email, expected_account_id, deletion_token):
     email_key = normalize_user_email(email)
     if not email_key:
         return False
@@ -46,8 +43,8 @@ def delete_flashcards(email, expected_account_id, deletion_token):
             return False
         try:
             user_ref = db_state.users_collection_ref.document(email_key)
-            for collection in (_cards_collection(email_key), _reviews_collection(email_key)):
-                documents = list(collection.stream())
+            for name in LEGACY_COLLECTIONS:
+                documents = list(user_ref.collection(name).stream())
                 for offset in range(0, len(documents), 400):
                     refs = [document.reference for document in documents[offset:offset + 400]]
                     transaction = db_state.db.transaction()
@@ -60,10 +57,16 @@ def delete_flashcards(email, expected_account_id, deletion_token):
                     )
                     if not deleted:
                         return False
+            private_refs = [user_ref.collection("private").document(name) for name in LEGACY_PRIVATE_DOCUMENTS]
+            deleted, _ = firestore.transactional(_delete_batch_in_transaction)(
+                db_state.db.transaction(), user_ref, private_refs, expected_account_id, deletion_token,
+            )
+            if not deleted:
+                return False
         except Exception as error:
-            logger.error("Firestore flashcard account cleanup failed", extra={
-                "operation": "delete_flashcards",
-                "error": str(error),
+            logger.error("Firestore legacy account cleanup failed", extra={
+                "operation": "delete_legacy_account_data",
+                "error": type(error).__name__,
             })
             return False
 

@@ -6,7 +6,7 @@ the allowlists below, and only allowlisted row actions can affect calculations.
 
 from decimal import Decimal, InvalidOperation
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 RULE_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
@@ -28,12 +28,13 @@ OPERATORS = ("always", "equals", "not_equals", "in", "not_in", "contains", "gt",
 
 # Row-executable actions change how a single ledger row is interpreted.
 EXECUTABLE_ACTIONS = frozenset({
-    "classify", "exclude", "include", "flag", "set_category", "allocate", "reverse", "allow",
+    "classify", "exclude", "flag", "set_category", "allocate", "reverse",
 })
 
 # Allowlisted policy/invariant/stateful-handler actions. They are stored and
 # reported but never applied per row by the dry-run engine.
 POLICY_ACTIONS = frozenset({
+    "allow", "include",
     "read_combined_only", "use_eur", "use_dublin", "sum_eligible_signed", "avoid_double_fee",
     "monthly_net_waterfall", "calendar_month_filters", "label_provisional",
     "assets_minus_liabilities", "no_double_payroll", "explicit_ratio", "require_valid_budget",
@@ -46,6 +47,27 @@ POLICY_ACTIONS = frozenset({
 })
 
 KNOWN_ACTIONS = EXECUTABLE_ACTIONS | POLICY_ACTIONS
+
+# Accounting decisions compete; category assignment and review are independent.
+ACTION_EFFECTS = {
+    "classify": "accounting", "exclude": "accounting", "allocate": "accounting",
+    "reverse": "accounting", "set_category": "category", "flag": "review",
+}
+
+
+def action_value_error(rule):
+    action, value = rule.get("action"), rule.get("action_value") or ""
+    if action == "classify":
+        kind, separator, category = value.partition(":")
+        if kind not in ("Income", "Expense", "Refund", "Transfer") or (separator and not category.strip()):
+            return "classify requires Income, Expense, Refund or Transfer, optionally followed by :Category"
+    if action == "set_category" and not value.strip():
+        return "set_category requires a category"
+    if action in ("allocate", "reverse"):
+        expected = {"allocate": "unfunded_portion_only", "reverse": "previously_recognised_expense"}[action]
+        if value != expected:
+            return f"{action} requires action_value {expected!r}"
+    return None
 
 
 def is_executable(rule):
@@ -83,6 +105,11 @@ def validate_fields(data, strict=True):
         errors.append(f"field must be one of {', '.join(ROW_FIELDS)} or '*'")
     if action not in KNOWN_ACTIONS:
         message = f"unsupported action {action!r}"
+        if strict:
+            errors.append(message)
+        else:
+            review_reason = message
+    elif message := action_value_error(clean):
         if strict:
             errors.append(message)
         else:
@@ -183,7 +210,8 @@ def active_executable_rules(rules):
 
 def _as_decimal(value):
     try:
-        return Decimal(str(value).strip())
+        result = Decimal(str(value).strip())
+        return result if result.is_finite() else None
     except (InvalidOperation, ValueError, TypeError):
         return None
 
@@ -220,10 +248,11 @@ def find_conflicts(rules):
     """Flag groups of active executable rules that compete on the same condition."""
     groups = {}
     for rule in active_executable_rules(rules):
-        key = (rule["field"], rule["operator"], (rule.get("value") or "").strip().lower(), rule["priority"])
+        key = (rule["field"], rule["operator"], (rule.get("value") or "").strip().lower(),
+               rule["priority"], ACTION_EFFECTS[rule["action"]])
         groups.setdefault(key, []).append(rule)
     conflicts = []
-    for (field, operator, value, priority), members in groups.items():
+    for (field, operator, value, priority, _effect), members in groups.items():
         outcomes = {(member["action"], member.get("action_value") or "") for member in members}
         if len(outcomes) > 1:
             conflicts.append({
@@ -233,19 +262,35 @@ def find_conflicts(rules):
     return sorted(conflicts, key=lambda item: item["rule_ids"])
 
 
+def matching_rule_effects(active_rules, row):
+    """Match the original interpreted row; first rule per effect wins. No chaining."""
+    matches, selected, effects = [], [], set()
+    for rule in active_rules:
+        if rule_matches(rule, row):
+            matches.append(rule)
+            effect = ACTION_EFFECTS[rule["action"]]
+            if effect not in effects:
+                selected.append(rule)
+                effects.add(effect)
+    return matches, selected
+
+
 def evaluate_rows(rules, rows):
     """Dry-run: apply active janus row rules to sample rows. Pure; never mutates."""
+    # Import here to keep the calculation module's shared predicate dependency acyclic.
+    from .finance_calc import derive_rows
+
     active = active_executable_rules(rules)
     results = []
-    for index, row in enumerate(rows):
-        matches = [rule for rule in active if rule_matches(rule, row)]
-        outcome = matches[0] if matches else None
+    for index, row in enumerate(derive_rows(rules, rows)):
+        matches, _selected = matching_rule_effects(active, row)
+        interpretation = row["derived"]
         results.append({
             "index": index,
-            "outcome": None if outcome is None else {
-                "rule_id": outcome["rule_id"], "action": outcome["action"],
-                "action_value": outcome.get("action_value") or "",
+            "outcome": None if interpretation["rule_id"] is None else {
+                key: interpretation[key] for key in ("rule_id", "action", "action_value")
             },
+            "derived": interpretation,
             "matches": [
                 {"rule_id": rule["rule_id"], "priority": rule["priority"],
                  "action": rule["action"], "action_value": rule.get("action_value") or ""}

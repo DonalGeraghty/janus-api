@@ -13,7 +13,7 @@ from services.firebase import db_state
 
 
 TOKEN = "ya29.synthetic-google-token-0123456789abcdef"
-WORKBOOK = "1RUiRPyU2DnoXe5Tbhd6BZXMCdJtxg7FP3UQwCd2i_e0"
+WORKBOOK = "synthetic_finance_workbook_0123456789abcdef"
 HEADER = ["Transaction ID", "Date", "Month", "Account", "Description", "Merchant", "Amount EUR",
           "Fee EUR", "Type", "Category", "Spending class", "Source references", "Review status",
           "Notes", "Balance EUR", "Include provisional totals", "Receipt group ID"]
@@ -46,6 +46,59 @@ def totals(rows, start=None, end=None):
 
 
 class AcceptanceCaseTests(unittest.TestCase):
+    def test_rules_combine_independent_effects_without_changing_source_or_safeguards(self):
+        from copy import deepcopy
+        from core.finance_rules import evaluate_rows, find_conflicts
+
+        def rule(rule_id, action, value, priority, **changes):
+            return {"rule_id": rule_id, "scope": "janus", "status": "active",
+                    "field": "merchant", "operator": "equals", "value": "Shop",
+                    "action": action, "action_value": value, "priority": priority, **changes}
+
+        rules = [rule("CLASS", "classify", "Expense:Household", 200),
+                 rule("CATEGORY-B", "set_category", "Other", 50),
+                 rule("CATEGORY-A", "set_category", "Groceries", 50),
+                 rule("FLAG", "flag", "review", 300),
+                 rule("POLICY", "include", "cash_assets", 1000),
+                 rule("OFF", "exclude", "budget_cashflow", 900, status="disabled"),
+                 rule("WORKFLOW", "exclude", "budget_cashflow", 900, scope="chatgpt_workflow")]
+        source = [row(amount_eur="-10", merchant="Shop"),
+                  row(amount_eur="-20", merchant="Shop", include_provisional_totals="NO"),
+                  row(amount_eur="-30", merchant="Shop", event_type="confirmed_duplicate")]
+        before = deepcopy(source)
+        result = derived(source, rules)
+        interpretation = result[0]["derived"]
+        self.assertEqual(interpretation["category"], "Groceries")
+        self.assertEqual(interpretation["type"], "Expense")
+        self.assertTrue(interpretation["review"])
+        self.assertEqual([r["rule_id"] for r in interpretation["applied_rules"]], ["FLAG", "CLASS", "CATEGORY-A"])
+        self.assertEqual(interpretation["effective_budget_amount_eur"], "-10.00")
+        self.assertTrue(all(r["derived"]["excluded"] for r in result[1:]))
+        self.assertEqual(source, before)
+        preview, _ = evaluate_rows(rules, source)
+        self.assertEqual([r["derived"] for r in preview], [r["derived"] for r in result])
+        self.assertEqual(derived(source, list(reversed(rules))), result)
+        self.assertEqual(find_conflicts([rules[0], rules[2]]), [])
+        self.assertEqual(len(find_conflicts([rules[1], rules[2]])), 1)
+        # A lone compound classification supplies both the type and category.
+        self.assertEqual(derived(source[:1], rules[:1])[0]["derived"]["category"], "Household")
+
+    def test_stateful_rule_actions_are_bounded_and_wrong_context_is_flagged(self):
+        rules = [{"rule_id": action, "scope": "janus", "status": "active", "priority": 800,
+                  "field": "merchant", "operator": "equals", "value": action,
+                  "action": action, "action_value": value}
+                 for action, value in (("reverse", "previously_recognised_expense"),
+                                       ("allocate", "unfunded_portion_only"))]
+        source = [row(amount_eur="-100", type="Transfer", event_type="sinking_contribution_outgoing", fund_purpose="local_property_tax"),
+                  row(amount_eur="150", type="Income", merchant="reverse", event_type="sinking_release", fund_purpose="local_property_tax"),
+                  row(amount_eur="-20", merchant="reverse"), row(amount_eur="-30", merchant="allocate")]
+        result = derived(source, rules)
+        self.assertEqual(result[1]["derived"]["effective_budget_amount_eur"], "100.00")
+        for entry in result[2:]:
+            self.assertTrue(entry["derived"]["review"])
+            self.assertIn("rule_context_not_supported", entry["derived"]["warnings"])
+            self.assertEqual(Decimal(entry["derived"]["effective_budget_amount_eur"]), Decimal(entry["amount_eur"]))
+
     def test_salary_and_ordinary_purchase(self):
         t = totals([row(transaction_id="a", type="Income", amount_eur="4000"),
                     row(transaction_id="b", type="Expense", amount_eur="-10", merchant="Shop")])

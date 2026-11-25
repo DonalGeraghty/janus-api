@@ -19,9 +19,8 @@ from .account_state import (
 )
 from .core import normalize_user_email
 from .nutrition import delete_nutrition_entries
-from .flashcards import delete_flashcards
+from .legacy_data import delete_legacy_account_data
 from .openai_credentials import delete_all_ai_credentials
-from .legacy_garmin import delete_garmin_account_data
 from .push import delete_push_data
 from .workouts import delete_workout_entries
 from .habits import delete_habit_data
@@ -495,9 +494,6 @@ def delete_user_account(email, expected_account_id):
     if not credentials_deleted:
         return False, "delete_failed"
 
-    if not delete_garmin_account_data(email_key, expected_account_id, deletion_token):
-        return False, "delete_failed"
-
     if not delete_push_data(
         email_key,
         expected_account_id,
@@ -525,7 +521,7 @@ def delete_user_account(email, expected_account_id):
     if not delete_finance_account_data(email_key, expected_account_id, deletion_token):
         return False, "delete_failed"
 
-    if not delete_flashcards(
+    if not delete_legacy_account_data(
         email_key,
         expected_account_id,
         deletion_token,

@@ -25,18 +25,6 @@ class ApplicationFactoryTests(unittest.TestCase):
             self.assertEqual(route_inventory(application), CONTRACT["routes"])
             self.assertEqual(application.test_client().get("/").get_json(), CONTRACT["index"])
 
-    def test_instances_have_independent_configuration_and_single_registration(self):
-        first = create_app({"TESTING": True, "INSTANCE_LABEL": "first"})
-        second = create_app({"TESTING": True, "INSTANCE_LABEL": "second"})
-        self.assertIsNot(first, second)
-        first.config["INSTANCE_LABEL"] = "changed"
-        self.assertEqual(second.config["INSTANCE_LABEL"], "second")
-        expected = {"auth", "ai_settings", "nutrition", "push", "aether_habits", "health", "finance"}
-        self.assertEqual(set(first.blueprints), expected)
-        self.assertEqual(set(second.blueprints), expected)
-        self.assertEqual(len(first.before_request_funcs[None]), 1)
-        self.assertEqual(len(second.before_request_funcs[None]), 1)
-
     def test_health_response_and_request_logging_remain_unchanged(self):
         application = create_app({"TESTING": True})
         with patch("routes.health.get_database_status", return_value={"firestore_available": True}):

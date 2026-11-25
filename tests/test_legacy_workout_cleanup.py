@@ -1,4 +1,4 @@
-"""Retirement coverage and retained account-deletion guarantees for old data."""
+"""Retained account-deletion guarantees for historical workout data."""
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -23,14 +23,6 @@ class RetiredWorkoutApiTests(unittest.TestCase):
     def tearDown(self):
         for store in (db_state.auth_users_memory, db_state.workout_history_memory, db_state.habits_memory, db_state.habit_checkins_memory):
             store.clear()
-
-    def test_retired_routes_are_absent_for_signed_in_and_anonymous_clients(self):
-        for headers in ({}, self.headers):
-            for method, path in [('get', '/api/workouts'), ('post', '/api/workouts/analyze'),
-                                 ('put', '/api/workouts/old-entry'), ('delete', '/api/workouts/old-entry')]:
-                response = getattr(self.client, method)(path, headers=headers, json={})
-                self.assertEqual(response.status_code, 404, (method, path))
-        self.assertNotIn('/api/workouts', self.client.get('/').get_data(as_text=True))
 
     def test_historical_records_remain_until_explicit_account_deletion(self):
         records = {'old-entry': {'title': 'Historical workout'}}

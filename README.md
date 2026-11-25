@@ -4,7 +4,7 @@ Janus API is the shared backend for three sibling frontends — [Aether](https:/
 
 Read-only ledger sync: `POST /api/finance/sync` reads the account's workbook (`combined data` A:Q) with the stored read-only token, mapping columns by header name. Sheets native values are parsed explicitly (1900-system serial dates, native numerics); money is handled as `Decimal` and serialized as decimal strings with `currency: EUR`, timezone `Europe/Dublin`; unknown values stay null, never zero. Snapshots are derived, in-memory and per-account: one sync lock per account, atomic swap on success, and a failed or rejected sync retains the last good snapshot with `stale: true` (a 401/403 from Google maps to 409 `sheets_reconnect_required`). After a restart the status endpoint reports `sync_required` rather than empty data. The snapshot cache is never shared across instances or treated as durable; a private Cloud Storage snapshot is the follow-up if multi-instance stability is required. Janus never writes to the workbook.
 
-Read API: every endpoint reads one pinned snapshot (meta carries `snapshot_id` + `rule_set_version`; no mixed versions) and requires a prior successful sync (`409 sync_required` otherwise). Periods are whole calendar months in Europe/Dublin (`this_month` default, `last_month`, `last_3/6/12` including current, `ytd`, `all`, or custom `start`/`end`); missing months are reported as gaps, never zeros. Budget math sums signed Amount EUR for Income/Expense/Refund with inclusion YES, applies active rules deterministically (priority desc, rule_id asc; first match wins) with per-row reasons, excludes transfers/savings/Food Pot from budget cash flow, reports investment principal separately, never subtracts Fee EUR twice, counts receipt groups once, and enforces duplicate/failed/reverted exclusions in code regardless of rules. The sinking fund keeps a stateful recognised-balance ledger across all history; unknown opening recognition blocks unsupported exclusions and is flagged provisional. Money is Decimal, serialized as decimal strings in EUR.
+Read API: every endpoint reads one pinned snapshot (meta carries `snapshot_id` + `rule_set_version`; no mixed versions) and requires a prior successful sync (`409 sync_required` otherwise). Periods are whole calendar months in Europe/Dublin (`this_month` default, `last_month`, `last_3/6/12` including current, `ytd`, `all`, or custom `start`/`end`); missing months are reported as gaps, never zeros. Budget math sums signed Amount EUR for Income/Expense/Refund with inclusion YES, applies active rules deterministically (priority desc, rule_id asc; first match per independent effect wins) with per-row reasons, excludes transfers/savings/Food Pot from budget cash flow, reports investment principal separately, never subtracts Fee EUR twice, counts receipt groups once, and enforces duplicate/failed/reverted exclusions in code regardless of rules. The sinking fund keeps a stateful recognised-balance ledger across all history; unknown opening recognition blocks unsupported exclusions and is flagged provisional. Money is Decimal, serialized as decimal strings in EUR.
 
 Finance chat: `POST /api/finance/chat` requires a synced snapshot and the account's selected, KMS-stored AI credential. The backend runs the read-only tool registry (`core/finance_chat.py`) itself and sends the bounded pack (<=24 KiB) with the question to the chosen provider — the model never calculates and all financial text is treated as data. Responses carry snapshot/rule-set metadata, coverage, stale flag and a privacy note; they are `no-store` and never logged.
 
@@ -12,7 +12,7 @@ Finance chat: `POST /api/finance/chat` requires a synced snapshot and the accoun
 
 Minerva now uses its finance dashboard and Account pages. The former flashcard CRUD/due/review endpoints, `POST /api/minerva/respond`, and `GET/PUT /api/user/minerva-settings` are removed and return 404. Card drafting prompts, provider methods, scheduling, and operational card storage code are removed too.
 
-Existing stored flashcards and review history are not migrated or erased by this release. The internal legacy cleanup module remains so explicit shared-account deletion still removes both collections with account-generation and deletion-token checks. Habit, nutrition and finance routes, shared authentication, and AI credential/model settings remain active. Historical Garmin records are still removed by guarded account deletion.
+Existing stored flashcards and review history are not migrated or erased by this release. Shared legacy-account cleanup removes historical collections and retired integration credentials during explicit account deletion, with account-generation and deletion-token checks. Habit, nutrition and finance routes, shared authentication, and AI credential/model settings remain active.
 
 Deploy the updated Minerva frontend before retiring the backend endpoints if older browser clients still need the study interface.
 
@@ -46,6 +46,12 @@ Janus hosts each account's own finance rule set and (later) read-only access to 
 | `POST` | `/api/finance/rules/restore/{version}` | Restore a previous rule-set version |
 
 Rules are data, never code. Fields, operators and actions are validated against fixed allowlists (`core/finance_rules.py`); an unknown action can never activate and is held with status `review`. Conflicting active assignments (same condition and priority, different outcomes) are reported and the incoming rows are held for review. Priority order is deterministic: higher `priority` first, then `rule_id`. CSV columns are `rule_id,scope,name,type,field,operator,value,action,action_value,priority,status,source_section,description`; `scope` is `janus` (executable/reporting) or `chatgpt_workflow` (reference only). Request bodies are capped at 256 KiB.
+
+Row rules have three independent effects: an accounting decision (`classify`, `exclude`, `allocate`, `reverse`), a category override (`set_category`), and a review flag (`flag`). The first matching rule for each effect wins, so a high-priority classification does not hide a category or review rule. Predicates use the original row plus inferred event fields; actions do not trigger other predicates. `classify` accepts Income, Expense, Refund or Transfer, optionally `Type:Category`; an explicit `set_category` overrides that fallback category. Conflicts are checked within each effect, so compatible classification and category rules can be imported together.
+
+`allocate:unfunded_portion_only` uses the covered-sinking-bill calculation. `reverse:previously_recognised_expense` uses the sinking-release calculation, capped by the recognised balance; it never blindly negates a bank amount. A rule used on the wrong event is flagged for review with `rule_context_not_supported`; any unrecognised release remainder is flagged too. Existing stateful accounting and integrity safeguards remain authoritative. In particular, rules cannot include sheet-NO, invalid, duplicate, failed or reverted rows. An explicit matching exclusion is respected, including on sinking events; use priority to place specific accounting rules before broad transfer exclusions. `allow:sinking_fund` and `include:cash_assets` are reference policies, not row mutations, and cannot suppress executable rules.
+
+Ledger rows expose `derived.applied_rules`, the primary accounting outcome, warnings, and the effective amount. The dry-run endpoint returns the same `derived` interpretation and uses the same accounting engine, alongside all predicate matches. Stateful dry runs need the relevant preceding contributions in the supplied rows; a partial sample cannot establish a historical recognised balance. Invalid JSON action values are rejected; CSV action values that cannot execute are held for review.
 
 Storage lives under `users/{email}` in Firestore: `finance_rules/{rule_id}`, `finance_rule_history/{version}` (full snapshot per version) and `finance_settings/settings` (holds `rule_set_version`). Every mutation is one transaction that reads first, guards the account generation and deletion tombstone, and writes rules, settings and history together. The local in-memory fallback follows the same rules, and guarded account deletion removes all three collections without touching the external Sheet. Run the finance tests with `python -m unittest discover -s tests -p test_finance_rules_api.py`.
 
@@ -103,6 +109,38 @@ See [Overall architecture](#overall-architecture) below for how this fits togeth
 - pywebpush/py-vapid for standards-based Web Push
 
 ## Local development
+
+### Run Janus and Minerva together with a demo user
+
+With this repository at `C:\GitHub\janus-api` and Minerva at
+`C:\GitHub\minerva`, run in PowerShell:
+
+```powershell
+cd C:\GitHub\janus-api
+.\.venv\Scripts\python.exe start_local_demo.py
+```
+
+Open http://127.0.0.1:5173 and click **Use demo account**, or sign in with
+`demo@minerva.local` / `minerva-demo`. Janus runs at http://127.0.0.1:5000.
+Press Ctrl+C in the launcher terminal to stop both apps. Ports 5000 and 5173
+must be free. Logs are under the ignored `.local-demo` directory.
+For a different Minerva checkout, pass `--minerva C:\path\to\minerva`.
+
+The dedicated `run_demo.py` development harness substitutes in-memory storage
+and synthetic Sheets responses, while using the normal password/JWT login,
+ledger parser, sync, accounting, rules and finance routes. It supplies six months
+of invented transactions and horizontal wealth snapshots relative to today's
+Europe/Dublin date. Data and edits reset on restart; tokens expire on restart.
+Responses identify the source as `local_demo`. No Firestore, Sheets, KMS or AI
+credentials are needed or used. AI requests and external connection changes are
+disabled. Budgets remain unavailable and sinking recognition remains provisional.
+This preview does not verify the accounting corrections described in the handoff.
+Production still uses `app:app`; the demo is bound to loopback only.
+
+For a fresh checkout, create `.venv`, install `requirements.txt`, and run `npm ci`
+in Minerva first. Use the Python and Node versions specified by the repositories.
+Alternatively, start `.\.venv\Scripts\python.exe run_demo.py` here and
+`npm run dev:demo` in Minerva in separate terminals.
 
 ### Requirements
 
@@ -464,5 +502,5 @@ Nyx (React/Vite, Cloud Run)      ─┘                                 │     
 - Each frontend is a static Vite build served by nginx in its own container (Node build stage, then `nginx:alpine`, port `8080`, with a `/health` endpoint), deployed from its own Artifact Registry repository (`aether`, `minerva`, `nyx`) by its own `deploy-gcp.yml` GitHub Actions workflow. Those workflows build, push, then `gcloud run deploy`, preferring Workload Identity Federation with a `GCP_SA_KEY` secret as a fallback.
 - Janus API deploys differently: `.github/workflows/deploy.yml` runs `gcloud run deploy --source .`, which lets Cloud Build produce the container directly from source, so there is no separate Artifact Registry push step and no Workload Identity Federation — authentication uses only the static `GCP_SA_KEY` secret.
 - Every frontend points at this service via a `VITE_JANUS_API_URL` build-time variable (defaulting to the deployed Janus API URL). Because all three frontends talk to the same Janus API deployment and Firestore project, a single account's credentials, selected AI provider/model, and login session are shared across Aether, Minerva, and Nyx.
-- Each frontend calls its own product endpoints (Aether → `/api/habits/*` and habit label/check-in endpoints, Nyx → `/api/nutrition/*`, Minerva → `/api/finance/*`) plus shared authentication and AI-credential endpoints. Workout, flashcard and Garmin history are retained only for legacy-data cleanup.
+- Each frontend calls its own product endpoints (Aether → `/api/habits/*` and habit label/check-in endpoints, Nyx → `/api/nutrition/*`, Minerva → `/api/finance/*`) plus shared authentication and AI-credential endpoints. Workout and retired integration records are retained only for guarded account-deletion cleanup.
 - Two pieces of infrastructure still carry pre-rename names from when this service only served Nyx: the KMS keyring `janus-gate` (kept because existing encrypted credentials are bound to its resource name) and the Cloud Scheduler job `nyx-push-reminders` (renaming it has no functional benefit, since it now dispatches reminders for every app's users).
