@@ -96,7 +96,7 @@ class FinanceFirestoreModeTests(unittest.TestCase):
             store.clear()
         self.transactional = patch.object(real_firestore, "transactional", fake_transactional)
         self.transactional.start()
-        self.encrypt = patch("routes.finance.encrypt_api_key", return_value="fake-kms-ciphertext")
+        self.encrypt = patch("routes.finance.connection.encrypt_api_key", return_value="fake-kms-ciphertext")
         self.encrypt.start()
         self.client = app.test_client()
         token = create_access_token("owner@example.com", "acc-1")
@@ -159,7 +159,7 @@ class FinanceFirestoreModeTests(unittest.TestCase):
         self.assertEqual({r["rule_id"]: r["status"] for r in with_deleted if r["rule_id"] in ("A01", "A05")},
                          {"A01": "deleted", "A05": "deleted"})
         # Exercise the production transaction path for an approved, keyless migration.
-        from core.finance_sheets import HEADER_TO_FIELD
+        from core.finance.sheets import HEADER_TO_FIELD
         reader = patch.dict(os.environ, {"FINANCE_SHEETS_SERVICE_ACCOUNT": "reader@synthetic-project.iam.gserviceaccount.com"})
         reader.start()
         self.addCleanup(reader.stop)
@@ -167,8 +167,8 @@ class FinanceFirestoreModeTests(unittest.TestCase):
         approval = {"account_id": "wrong-generation", "workbook_id": "synthetic_finance_workbook_0123456789abcdef"}
         settings["finance_service_account_approval"] = approval
         body = {"mode": "service_account", "workbook_id": approval["workbook_id"]}
-        with (patch("services.sheets_identity.access_token", return_value="synthetic-short-token"),
-              patch("services.google_sheets.fetch_values", return_value=[list(HEADER_TO_FIELD)]) as fetch):
+        with (patch("services.finance.identity.access_token", return_value="synthetic-short-token"),
+              patch("services.finance.sheets.fetch_values", return_value=[list(HEADER_TO_FIELD)]) as fetch):
             self.assertEqual(self.client.put("/api/finance/connection", headers=self.headers, json=body).status_code, 403)
             fetch.assert_not_called()
             approval["account_id"] = "acc-1"

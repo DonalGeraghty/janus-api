@@ -5,11 +5,9 @@ owner-scoped context pack below. Financial text (merchants, notes) is data, neve
 instructions. No write tools exist. Prompts and answers are not persisted or logged.
 """
 
-import re
-
-from core import finance_calc
-from services import finance_sync
-from services.firebase.finance_rules import list_rules
+from core.finance import calculations as finance_calc
+from services.finance import sync as finance_sync
+from services.firebase.finance.rules import list_rules
 
 
 MAX_MESSAGE_CHARS = 4000

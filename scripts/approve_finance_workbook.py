@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from google.cloud import firestore
-from services.finance_connection_setup import workbook_id
+from services.finance.connection import workbook_id
 from services.firebase.account_state import ACCOUNT_DELETION_FIELD
 
 

@@ -278,7 +278,7 @@ def matching_rule_effects(active_rules, row):
 def evaluate_rows(rules, rows):
     """Dry-run: apply active janus row rules to sample rows. Pure; never mutates."""
     # Import here to keep the calculation module's shared predicate dependency acyclic.
-    from .finance_calc import derive_rows
+    from .calculations import derive_rows
 
     active = active_executable_rules(rules)
     results = []

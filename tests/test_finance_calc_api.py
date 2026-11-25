@@ -5,10 +5,10 @@ from datetime import date
 from unittest.mock import patch
 
 from app import app
-from core import finance_calc
-from core.finance_sheets import SHEETS_EPOCH, parse_date, rows_to_transactions
+from core.finance import calculations as finance_calc
+from core.finance.sheets import SHEETS_EPOCH, parse_date, rows_to_transactions
 from decimal import Decimal
-from services import google_sheets
+from services.finance import sheets as google_sheets
 from services.firebase import db_state
 
 
@@ -48,7 +48,7 @@ def totals(rows, start=None, end=None):
 class AcceptanceCaseTests(unittest.TestCase):
     def test_rules_combine_independent_effects_without_changing_source_or_safeguards(self):
         from copy import deepcopy
-        from core.finance_rules import evaluate_rows, find_conflicts
+        from core.finance.rule_engine import evaluate_rows, find_conflicts
 
         def rule(rule_id, action, value, priority, **changes):
             return {"rule_id": rule_id, "scope": "janus", "status": "active",
@@ -280,11 +280,11 @@ class FinanceReadApiTests(unittest.TestCase):
                        db_state.finance_sync_status_memory)
         for store in self.stores:
             store.clear()
-        self.encrypt = patch("routes.finance.encrypt_api_key", return_value="fake-kms-ciphertext")
+        self.encrypt = patch("routes.finance.connection.encrypt_api_key", return_value="fake-kms-ciphertext")
         self.encrypt.start()
-        self.token = patch("services.finance_sync._load_token", return_value=TOKEN)
+        self.token = patch("services.finance.sync._load_token", return_value=TOKEN)
         self.token.start()
-        self.fetch = patch("services.google_sheets.fetch_values", side_effect=grid_for(GRID))
+        self.fetch = patch("services.finance.sheets.fetch_values", side_effect=grid_for(GRID))
         self.fetch_mock = self.fetch.start()
         self.client = app.test_client()
         self.headers = self.register("owner@example.com")

@@ -11,12 +11,12 @@ from decimal import Decimal, InvalidOperation
 
 from firebase_admin import firestore
 
-from core.finance_rules import ROW_FIELDS, evaluate_rows, find_conflicts, validate_fields
-from core.finance_rules_csv import parse_rules_csv, rules_to_csv, rules_to_json_payload
-from . import db_state
-from .account_state import ACCOUNT_DELETION_FIELD, ACCOUNT_DELETION_TOKEN_FIELD, account_id_matches
-from .core import normalize_user_email
-from ..logging_service import logger
+from core.finance.rule_engine import ROW_FIELDS, evaluate_rows, find_conflicts, validate_fields
+from core.finance.rule_csv import parse_rules_csv, rules_to_csv, rules_to_json_payload
+from .. import db_state
+from ..account_state import ACCOUNT_DELETION_FIELD, ACCOUNT_DELETION_TOKEN_FIELD, account_id_matches
+from ..core import normalize_user_email
+from ...logging_service import logger
 
 
 class FinanceError(Exception):

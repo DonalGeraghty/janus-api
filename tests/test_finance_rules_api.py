@@ -34,7 +34,7 @@ class FinanceRulesApiTests(unittest.TestCase):
                        db_state.finance_connection_memory)
         for store in self.stores:
             store.clear()
-        self.encrypt = patch("routes.finance.encrypt_api_key", return_value="fake-kms-ciphertext")
+        self.encrypt = patch("routes.finance.connection.encrypt_api_key", return_value="fake-kms-ciphertext")
         self.encrypt.start()
         self.client = app.test_client()
         self.headers = self.register("owner@example.com")
@@ -102,7 +102,7 @@ class FinanceRulesApiTests(unittest.TestCase):
 
     def test_connection_save_fails_closed_without_kms(self):
         self.encrypt.stop()
-        with patch("routes.finance.encrypt_api_key", side_effect=CredentialEncryptionError("no kms")):
+        with patch("routes.finance.connection.encrypt_api_key", side_effect=CredentialEncryptionError("no kms")):
             result = self.client.put("/api/finance/connection", headers=self.other,
                                      json={"access_token": TOKEN, "workbook_id": WORKBOOK})
         self.assertEqual(result.status_code, 503)

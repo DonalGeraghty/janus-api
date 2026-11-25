@@ -4,8 +4,8 @@ from datetime import date
 from unittest.mock import patch
 
 from app import app
-from core.finance_sheets import SHEETS_EPOCH, parse_date, parse_money, rows_to_transactions
-from services import google_sheets
+from core.finance.sheets import SHEETS_EPOCH, parse_date, parse_money, rows_to_transactions
+from services.finance import sheets as google_sheets
 from services.firebase import db_state
 
 
@@ -62,11 +62,11 @@ class FinanceSyncApiTests(unittest.TestCase):
                        db_state.finance_sync_status_memory)
         for store in self.stores:
             store.clear()
-        self.encrypt = patch("routes.finance.encrypt_api_key", return_value="fake-kms-ciphertext")
+        self.encrypt = patch("routes.finance.connection.encrypt_api_key", return_value="fake-kms-ciphertext")
         self.encrypt.start()
-        self.token = patch("services.finance_sync._load_token", return_value=TOKEN)
+        self.token = patch("services.finance.sync._load_token", return_value=TOKEN)
         self.token.start()
-        self.fetch = patch("services.google_sheets.fetch_values", side_effect=grid_for(GRID, SNAPSHOT_GRID))
+        self.fetch = patch("services.finance.sheets.fetch_values", side_effect=grid_for(GRID, SNAPSHOT_GRID))
         self.fetch_mock = self.fetch.start()
         self.client = app.test_client()
         self.headers = self.register("owner@example.com")

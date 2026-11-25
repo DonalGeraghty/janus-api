@@ -6,11 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from app import app
-from core.finance_sheets import HEADER_TO_FIELD, LEDGER_RANGE
-from services import sheets_identity
+from core.finance.sheets import HEADER_TO_FIELD, LEDGER_RANGE
+from services.finance import identity as sheets_identity
 from services.firebase import db_state
-from services.firebase.finance_connection import delete_finance_connection, save_finance_connection
-from services.google_sheets import SheetsError
+from services.firebase.finance.connections import delete_finance_connection, save_finance_connection
+from services.finance.sheets import SheetsError
 
 READER = "reader@synthetic-project.iam.gserviceaccount.com"
 WORKBOOK = "synthetic_finance_workbook_0123456789"
@@ -34,10 +34,10 @@ class SheetsServiceAccountTests(unittest.TestCase):
         self.headers = {"Authorization": "Bearer " + result.json["token"]}
         self.account_id = db_state.auth_users_memory["reader-owner@example.com"]["account_id"]
         self.approve()
-        self.token = patch("services.sheets_identity.access_token", return_value="synthetic-short-lived-token")
+        self.token = patch("services.finance.identity.access_token", return_value="synthetic-short-lived-token")
         self.token_mock = self.token.start()
         self.addCleanup(self.token.stop)
-        self.fetch = patch("services.google_sheets.fetch_values", side_effect=self.grid)
+        self.fetch = patch("services.finance.sheets.fetch_values", side_effect=self.grid)
         self.fetch_mock = self.fetch.start()
         self.addCleanup(self.fetch.stop)
 
@@ -123,8 +123,8 @@ class SheetsIdentityTests(unittest.TestCase):
         credentials.refresh = Mock(side_effect=refresh)
         with (patch.dict(os.environ, {"FINANCE_SHEETS_SERVICE_ACCOUNT": READER}),
               patch.object(sheets_identity, "_credentials", None), patch.object(sheets_identity, "_target", None),
-              patch("services.sheets_identity.google.auth.default", return_value=(Mock(), "synthetic-project")),
-              patch("services.sheets_identity.impersonated_credentials.Credentials", return_value=credentials) as factory):
+              patch("services.finance.identity.google.auth.default", return_value=(Mock(), "synthetic-project")),
+              patch("services.finance.identity.impersonated_credentials.Credentials", return_value=credentials) as factory):
             self.assertEqual(sheets_identity.access_token(), "synthetic-refreshed-token")
             self.assertEqual(sheets_identity.access_token(), "synthetic-refreshed-token")
             self.assertEqual(credentials.refresh.call_count, 1)
