@@ -296,4 +296,17 @@ def finance_chat(system, messages, email, api_key, model=None):
 
 
 def finance_budget(system, messages, email, api_key, model=None):
-    return finance_chat(system, messages, email, api_key, model)
+    from core.finance.budget import Proposal
+    from .ai_errors import AIResponseValidationError
+    try:
+        response = OpenAI(api_key=api_key).responses.parse(
+            model=_model_name(model), input=[{'role': 'system', 'content': system}] + list(messages),
+            text_format=Proposal, safety_identifier=_safety_identifier(email), store=False,
+        )
+        if response.output_parsed is None:
+            raise AIResponseValidationError('The provider returned no complete structured budget.')
+        return Proposal.model_validate(response.output_parsed).model_dump_json()
+    except (ValidationError, json.JSONDecodeError, TypeError):
+        raise AIResponseValidationError('The provider returned an invalid budget structure.') from None
+    except (AuthenticationError, PermissionDeniedError, RateLimitError, APIConnectionError, APITimeoutError, APIStatusError) as error:
+        _raise_mapped_openai_error(error)

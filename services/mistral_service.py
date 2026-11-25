@@ -266,4 +266,17 @@ def finance_chat(system, messages, email, api_key, model):
 
 
 def finance_budget(system, messages, email, api_key, model):
-    return finance_chat(system, messages, email, api_key, model)
+    from core.finance.budget import Proposal
+    from .ai_errors import AIResponseValidationError
+    try:
+        with Mistral(api_key=api_key) as client:
+            response = client.chat.parse(model=_normalize_model(model),
+                messages=[{'role': 'system', 'content': system}] + list(messages),
+                response_format=Proposal, temperature=0)
+        if not response.choices or getattr(response.choices[0].message, 'parsed', None) is None:
+            raise AIResponseValidationError('The provider returned no complete structured budget.')
+        return _parsed_response(response, Proposal, 'Mistral returned no structured budget').model_dump_json()
+    except (ValidationError, json.JSONDecodeError, TypeError):
+        raise AIResponseValidationError('The provider returned an invalid budget structure.') from None
+    except (errors.MistralError, httpx.RequestError) as error:
+        _raise_mapped_mistral_error(error)

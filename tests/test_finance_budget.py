@@ -1,8 +1,8 @@
 import copy
 import json
 import unittest
-from importlib import import_module
 from datetime import date
+from types import SimpleNamespace
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -85,7 +85,7 @@ class FinanceBudgetTests(unittest.TestCase):
         self.plan_mock.side_effect = AIRateLimitError("busy")
         self.assertEqual(self.plan().status_code, 502)
 
-    def test_rejects_underfunded_bills_nonmonotonic_limits_and_missing_categories(self):
+    def test_rejects_underfunded_bills_nonmonotonic_limits_and_missing_bill_categories(self):
         for mutate in (
             lambda p: p["categories"][0]["remaining"].update(save_more="10.00"),
             lambda p: p["categories"][0]["remaining"].update(save_more="110.00"),
@@ -102,7 +102,9 @@ class FinanceBudgetTests(unittest.TestCase):
         correction = proposal()["assumptions"][1]
         correction["status"] = "paid"
         body = {"corrections": [correction]}
-        self.assertEqual(self.plan(body).status_code, 422)
+        corrected = self.plan(body)
+        self.assertEqual(corrected.status_code, 200)
+        self.assertEqual(corrected.get_json()["plan"]["future_income_eur"], "0.00")
         p = proposal()
         p["assumptions"][1] = correction
         self.plan_mock.return_value = json.dumps(p)
@@ -141,17 +143,84 @@ class FinanceBudgetTests(unittest.TestCase):
         self.assertNotIn("FUTURE ROW", json.dumps(context))
         self.assertEqual(Decimal(context["actual"]["spent_eur"]), Decimal("82.34"))
 
+    def test_retries_once_with_actionable_feedback_then_succeeds(self):
+        broken = proposal()
+        broken['categories'][0]['remaining']['save_more'] = '110.00'
+        self.plan_mock.side_effect = [json.dumps(broken), json.dumps(proposal())]
+        response = self.plan()
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue(response.json['meta']['repair_attempted'])
+        self.assertEqual(self.plan_mock.call_count, 2)
+        self.assertIn('save_more <= balanced', self.plan_mock.call_args.args[1][-1]['content'])
+
+    def test_spent_only_category_and_numeric_money_do_not_discard_plan(self):
+        raw = proposal()
+        raw['assumptions'] = []
+        raw['categories'] = []
+        self.plan_mock.return_value = json.dumps(raw)
+        response = self.plan()
+        self.assertEqual(response.status_code, 200)
+        row = response.json['plan']['approaches']['balanced']['categories'][0]
+        self.assertEqual(row['limit_eur'], '82.34')
+        self.assertEqual(row['remaining_at_creation_eur'], '0.00')
+        self.assertTrue(response.json['plan']['reconciliation_notes'])
+        raw = proposal()
+        raw['categories'][0]['category'] = 'groceries'
+        raw['categories'][0]['expected_remaining_eur'] = 120
+        raw['categories'][0]['remaining']['balanced'] = 90.0
+        self.plan_mock.return_value = json.dumps(raw)
+        response = self.plan()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['plan']['approaches']['balanced']['categories'][0]['limit_eur'], '172.34')
+
+    def test_exhausted_repair_returns_reason_without_raw_response_or_unbounded_calls(self):
+        self.plan_mock.return_value = json.dumps({'private_financial_value': 'SECRET-SYNTHETIC'})
+        response = self.plan()
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.plan_mock.call_count, 2)
+        self.assertIn('validation_reason', response.json)
+        self.assertNotIn('SECRET-SYNTHETIC', json.dumps(response.json))
+
+    def test_import_change_during_invalid_response_prevents_repair_call(self):
+        def replace(*args):
+            sync.get_snapshot('owner@example.com')['snapshot_id'] = 'replacement'
+            return '{}'
+        self.plan_mock.side_effect = replace
+        self.assertEqual(self.plan().status_code, 409)
+        self.assertEqual(self.plan_mock.call_count, 1)
+
+    def test_schema_failure_can_be_repaired_but_provider_outage_is_not_retried(self):
+        from services.ai_errors import AIResponseValidationError
+        self.plan_mock.side_effect = [AIResponseValidationError('Invalid budget structure.'), json.dumps(proposal())]
+        self.assertEqual(self.plan().status_code, 200)
+        self.plan_mock.reset_mock()
+        self.plan_mock.side_effect = AIRateLimitError('busy')
+        self.assertEqual(self.plan().status_code, 502)
+        self.assertEqual(self.plan_mock.call_count, 1)
+
 
 class BudgetProviderTests(unittest.TestCase):
-    def test_budget_dispatch_reuses_each_provider_with_sufficient_output_room(self):
-        models = {"openai": "gpt-5.6-sol", "mistral": "mistral-small-2603", "anthropic": "claude-sonnet-5"}
-        for provider, model in models.items():
-            adapter = import_module(f"services.{provider}_service")
-            with self.subTest(provider=provider), patch.object(adapter, "finance_chat", return_value="{}") as call:
-                self.assertEqual(ai_service.finance_budget("system", [], "user@example.com", "fake-key", provider, model), "{}")
-                if provider == "anthropic":
-                    self.assertEqual(call.call_args.kwargs["max_tokens"], 10000)
+    def test_budget_dispatch_requests_structured_output_from_every_provider(self):
+        parsed = budget.Proposal.model_validate(proposal())
+        with patch('services.openai_service.OpenAI') as sdk:
+            call = sdk.return_value.responses.parse
+            call.return_value = SimpleNamespace(output_parsed=parsed)
+            raw = ai_service.finance_budget('system', [], 'user@example.com', 'fake-key', 'openai', 'gpt-5.6-sol')
+            self.assertEqual(json.loads(raw)['categories'][0]['category'], 'Groceries')
+            self.assertIs(call.call_args.kwargs['text_format'], budget.Proposal)
+            self.assertFalse(call.call_args.kwargs['store'])
+        with patch('services.mistral_service.Mistral') as sdk:
+            call = sdk.return_value.__enter__.return_value.chat.parse
+            call.return_value = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))])
+            ai_service.finance_budget('system', [], 'user@example.com', 'fake-key', 'mistral', 'mistral-small-2603')
+            self.assertIs(call.call_args.kwargs['response_format'], budget.Proposal)
+        with patch('services.anthropic_service.Anthropic') as sdk:
+            call = sdk.return_value.__enter__.return_value.messages.parse
+            call.return_value = SimpleNamespace(parsed_output=parsed, stop_reason='end_turn')
+            ai_service.finance_budget('system', [], 'user@example.com', 'fake-key', 'anthropic', 'claude-sonnet-5')
+            self.assertIs(call.call_args.kwargs['output_format'], budget.Proposal)
+            self.assertEqual(call.call_args.kwargs['max_tokens'], 10000)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

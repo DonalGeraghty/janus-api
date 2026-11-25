@@ -19,3 +19,7 @@ class AIRateLimitError(RuntimeError):
 
 class AIServiceError(RuntimeError):
     pass
+
+
+class AIResponseValidationError(AIServiceError):
+    """A provider returned an unusable structure, eligible for one repair attempt."""
