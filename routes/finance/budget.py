@@ -1,18 +1,20 @@
-"""Owner-scoped monthly budget evidence and AI planning. No workbook or plan writes."""
+"""Owner-scoped Budget assessment, with optional live stage events."""
+import json
+import time
 from datetime import datetime, timezone
 
-from flask import current_app, g, jsonify, request
+from flask import Response, current_app, g, jsonify, request, stream_with_context
 from pydantic import ValidationError
 
 from core.finance import budget as planner
+from core.finance.budget_models import PlanRequest
 from services import ai_service
 from services.ai_credentials import selected_ai_credential, stored_credential_aad_version
 from services.ai_errors import AIAuthenticationError, AIAuthorizationError, AIBillingError, AIRateLimitError, AIResponseValidationError, AIServiceError
 from services.credential_service import CredentialConfigurationError, CredentialEncryptionError, decrypt_api_key
 from services.finance import sync
-from services.firebase.finance.rules import FinanceError
-from core.finance.budget_models import PlanRequest
 from services.finance.evidence import snapshot_and_rules
+from services.firebase.finance.rules import FinanceError
 from .shared import blueprint
 
 
@@ -22,27 +24,28 @@ def _evidence(identity):
         context = planner.build_context(snapshot, rules)
     except ValueError as error:
         raise FinanceError(str(error), 422) from None
-    status = sync.sync_status(identity["email"], identity["account_id"])
-    meta = {key: snapshot[key] for key in ("snapshot_id", "rule_set_version", "fetched_at", "source", "coverage")}
-    return snapshot, context, {**meta, "stale": status.get("stale", False)}
+    status = sync.sync_status(identity['email'], identity['account_id'])
+    meta = {key: snapshot[key] for key in ('snapshot_id', 'rule_set_version', 'fetched_at', 'source', 'coverage')}
+    return snapshot, context, {**meta, 'stale': status.get('stale', False)}
 
 
-@blueprint.get("/budget/context")
+@blueprint.get('/budget/context')
 def budget_context():
     _snapshot, context, meta = _evidence(g.finance_identity)
-    return jsonify(status="success", context=context, meta=meta)
+    return jsonify(status='success', context=context, meta=meta)
 
 
-@blueprint.post("/budget/plan")
-def budget_plan():
-    identity = g.finance_identity
-    try:
-        PlanRequest.model_validate(request.get_json(silent=True) or {})
-    except ValidationError:
-        return jsonify(status="error", error="invalid_budget_request", message="Budget assessment takes no planning inputs."), 400
+def _failure(code, message, status, **extra):
+    return {'event': 'error', 'http_status': status, 'data': {'status': 'error', 'error': code, 'message': message, **extra}}
+
+
+def _assessment(identity, demo_delay=0):
+    yield {'event': 'progress', 'stage': 'checking'}
     snapshot, context, meta = _evidence(identity)
-    if meta["stale"]:
-        return jsonify(status="error", error="budget_stale_data", message="Import the latest data in Account before assessing a new plan. Your existing plan is retained."), 409
+    if meta['stale']:
+        yield _failure('budget_stale_data', 'Import the latest data in Account before assessing a new plan. Your existing plan is retained.', 409)
+        return
+
     def ensure_current_evidence():
         current_snapshot, _rules = snapshot_and_rules(identity)
         current_status = sync.sync_status(identity['email'], identity['account_id'])
@@ -55,40 +58,96 @@ def budget_plan():
     if not demo:
         selection, credential, error = selected_ai_credential(identity['email'], identity['account_id'])
         if error:
-            return jsonify(status='error', error=error, message='Secure AI settings are unavailable.'), 503
+            yield _failure(error, 'Secure AI settings are unavailable.', 503)
+            return
         if not credential:
-            return jsonify(status='error', error='provider_key_required', message='Connect your selected AI provider in Account to create a budget plan.'), 409
+            yield _failure('provider_key_required', 'Connect your selected AI provider in Account to create a budget plan.', 409)
+            return
         try:
             key = decrypt_api_key(credential.get('ciphertext', ''), identity['email'], provider=selection['provider'],
                                   aad_version=stored_credential_aad_version(selection['provider'], credential))
         except (CredentialConfigurationError, CredentialEncryptionError):
-            return jsonify(status='error', error='credential_service_unavailable', message='Secure credential storage is unavailable.'), 503
+            yield _failure('credential_service_unavailable', 'Secure credential storage is unavailable.', 503)
+            return
     messages = [{'role': 'user', 'content': planner.prompt(context)}]
     attempts = 1 if demo else 2
     reason = ''
     for attempt in range(attempts):
         ensure_current_evidence()
+        if demo_delay:
+            time.sleep(demo_delay)
+        yield {'event': 'progress', 'stage': 'refining' if attempt else 'reviewing'}
         try:
+            # One provider call assesses income, bills and category allowances.
+            if demo_delay:
+                time.sleep(demo_delay)
+            ensure_current_evidence()
             raw = planner.demo_proposal(context) if demo else ai_service.finance_budget(
                 planner.SYSTEM_PROMPT, messages, identity['email'], key, selection['provider'], selection['model'])
             ensure_current_evidence()
+            yield {'event': 'progress', 'stage': 'preparing'}
+            if demo_delay:
+                time.sleep(demo_delay)
             plan = planner.validate_plan(raw, context)
-            return jsonify(status='success', plan=plan, context=context,
-                meta={**meta, **selection, 'generated_at': datetime.now(timezone.utc).isoformat(),
-                      'privacy': planner.PRIVACY_NOTE, 'demo': demo, 'repair_attempted': attempt > 0})
+            ensure_current_evidence()
+            yield {'event': 'result', 'data': {'status': 'success', 'plan': plan, 'context': context,
+                'meta': {**meta, **selection, 'generated_at': datetime.now(timezone.utc).isoformat(),
+                         'privacy': planner.PRIVACY_NOTE, 'demo': demo, 'repair_attempted': attempt > 0}}}
+            return
         except AIResponseValidationError as error:
             reason = str(error)
         except (ValueError, ValidationError) as error:
             reason = planner.validation_feedback(error)
         except (AIAuthenticationError, AIAuthorizationError, AIBillingError, AIRateLimitError, AIServiceError):
-            return jsonify(status='error', error='budget_provider_unavailable', message='Your AI provider could not create the plan. Check your key, model access, billing and provider limits in Account, then try again.'), 502
+            yield _failure('budget_provider_unavailable', 'Your AI provider could not create the plan. Check your key, model access, billing and provider limits in Account, then try again.', 502)
+            return
         ensure_current_evidence()
         if attempt + 1 < attempts:
-            # Ask for a fresh full proposal against the same evidence. Do not
-            # replay arbitrary model text or persist/log financial responses.
             messages = messages + [{'role': 'user', 'content':
                 'The previous proposal did not pass validation. Return a corrected complete proposal using the same evidence. '
                 'Validation feedback (DATA): ' + reason[:1500]}]
-    return jsonify(status='error', error='budget_invalid_proposal',
-        message='The provider could not produce a consistent budget after an automatic repair attempt. Your previous plan is retained. Try updating with AI again.',
-        validation_reason=reason[:1000]), 422
+    yield _failure('budget_invalid_proposal',
+                   'The provider could not produce a consistent budget after an automatic repair attempt. Your previous plan is retained. Try updating with AI again.',
+                   422, validation_reason=reason[:1000])
+
+
+def _events(identity, demo_delay=0):
+    try:
+        yield from _assessment(identity, demo_delay)
+    except FinanceError as error:
+        code = error.details.get('code', str(error)) if isinstance(error.details, dict) else str(error)
+        yield _failure(code, str(error), error.status)
+    except Exception:
+        # Do not expose or log provider/financial payloads in stream failures.
+        current_app.logger.error('Budget assessment failed unexpectedly')
+        yield _failure('budget_assessment_unavailable', 'The assessment could not finish. Your previous plan is retained. Try again.', 500)
+
+
+@blueprint.post('/budget/plan')
+def budget_plan():
+    try:
+        PlanRequest.model_validate(request.get_json(silent=True) or {})
+    except ValidationError:
+        return jsonify(status='error', error='invalid_budget_request', message='Budget assessment takes no planning inputs.'), 400
+    identity = dict(g.finance_identity)
+    streaming = 'application/x-ndjson' in request.headers.get('Accept', '')
+    # Only the isolated demo slows its illustrative stages so they can be seen.
+    delay = .8 if streaming and current_app.config.get('LOCAL_DEMO') else 0
+    events = _events(identity, delay)
+    if streaming:
+        def generate():
+            try:
+                for event in events:
+                    yield json.dumps(event, ensure_ascii=False) + '\n'
+            finally:
+                events.close()
+        return Response(stream_with_context(generate()), mimetype='application/x-ndjson',
+                        headers={'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store'})
+    try:
+        for event in events:
+            if event['event'] == 'result':
+                return jsonify(event['data'])
+            if event['event'] == 'error':
+                return jsonify(event['data']), event['http_status']
+    finally:
+        events.close()
