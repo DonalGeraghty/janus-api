@@ -46,6 +46,26 @@ def totals(rows, start=None, end=None):
 
 
 class AcceptanceCaseTests(unittest.TestCase):
+    def test_month_breakdown_keeps_types_separate_and_reconciles_canonical_amounts(self):
+        source = [row(amount_eur="1000.10", type="Income", category="Salary"),
+                  row(amount_eur="-200.20", category="Groceries"),
+                  row(amount_eur="-30.00", category="Groceries"),
+                  row(amount_eur="20.10", type="Refund", category="Groceries"),
+                  row(amount_eur="-999", type="Transfer"),
+                  row(amount_eur="-50", include_provisional_totals="NO"),
+                  row(amount_eur="-10", category=None)]
+        rows = derived(source)
+        breakdown = finance_calc.cashflow(rows, "2026-11", "2026-11", "breakdown")
+        self.assertEqual(breakdown, [{"month": "2026-11", "items": [
+            {"type": "Expense", "category": "Groceries", "amount_eur": "-230.20"},
+            {"type": "Expense", "category": "Uncategorised", "amount_eur": "-10.00"},
+            {"type": "Income", "category": "Salary", "amount_eur": "1000.10"},
+            {"type": "Refund", "category": "Groceries", "amount_eur": "20.10"},
+        ]}])
+        self.assertEqual(sum(Decimal(item["amount_eur"]) for item in breakdown[0]["items"]),
+                         Decimal(finance_calc.cashflow(rows, "2026-11", "2026-11")[0]["net"]))
+        self.assertEqual(finance_calc.cashflow(rows, "2026-10", "2026-10", "breakdown"), [])
+
     def test_rules_combine_independent_effects_without_changing_source_or_safeguards(self):
         from copy import deepcopy
         from core.finance.rule_engine import evaluate_rows, find_conflicts
@@ -352,6 +372,16 @@ class FinanceReadApiTests(unittest.TestCase):
         trends = self.client.get("/api/finance/trends?period=all", headers=self.headers).get_json()["trends"]
         self.assertEqual(len(trends), 2)
         self.assertEqual(self.client.get("/api/finance/cashflow?by=bogus", headers=self.headers).status_code, 400)
+
+    def test_month_breakdown_endpoint_is_scoped_and_carries_report_metadata(self):
+        response = self.client.get("/api/finance/cashflow?start=2026-11&end=2026-11&by=breakdown", headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        body = response.get_json()
+        self.assertEqual([item["month"] for item in body["cashflow"]], ["2026-11"])
+        summary = self.client.get("/api/finance/summary?start=2026-11&end=2026-11", headers=self.headers).get_json()
+        self.assertEqual(body["meta"], summary["meta"])
+        self.assertEqual(sum(Decimal(item["amount_eur"]) for item in body["cashflow"][0]["items"]), Decimal(summary["summary"]["adjusted_totals"]["net"]))
 
     def test_net_worth_sinking_and_budgets_states(self):
         worth = self.client.get("/api/finance/net-worth", headers=self.headers).get_json()["net_worth"]
