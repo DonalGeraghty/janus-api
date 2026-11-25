@@ -236,8 +236,10 @@ def _snapshot_and_rules(identity):
     snapshot = finance_sync.get_snapshot(identity["email"])
     if snapshot is None:
         raise FinanceError("Sync the ledger first (POST /api/finance/sync).", 409, details={"code": "sync_required"})
-    rules = list_rule_docs(identity["email"], identity["account_id"], scope="janus", status="active")["rules"]
-    return snapshot, rules
+    rule_set = list_rule_docs(identity["email"], identity["account_id"], scope="janus", status="active")
+    # Reports apply the current imported rules, independently of the Sheets import.
+    # Describe that exact rule set without mutating the cached source snapshot.
+    return {**snapshot, "rule_set_version": rule_set["rule_set_version"]}, rule_set["rules"]
 
 
 def _period():

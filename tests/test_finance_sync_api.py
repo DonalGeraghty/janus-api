@@ -10,7 +10,7 @@ from services.firebase import db_state
 
 
 TOKEN = "ya29.synthetic-google-token-0123456789abcdef"
-WORKBOOK = "1RUiRPyU2DnoXe5Tbhd6BZXMCdJtxg7FP3UQwCd2i_e0"
+WORKBOOK = "synthetic_finance_workbook_0123456789abcdef"
 
 
 HEADER = ["Transaction ID", "Date", "Month", "Account", "Description", "Merchant", "Amount EUR",

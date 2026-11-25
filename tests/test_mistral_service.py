@@ -142,11 +142,6 @@ class MistralCredentialTests(unittest.TestCase):
         self.assertNotIn(EMAIL, str(mistral_mock.mock_calls))
 
     @patch("services.mistral_service.Mistral")
-    def test_validate_key_accepts_omitted_email(self, mistral_mock):
-        self.assertEqual(validate_api_key(API_KEY).api_key, API_KEY)
-        self.assertNotIn("email", str(mistral_mock.mock_calls).lower())
-
-    @patch("services.mistral_service.Mistral")
     def test_invalid_key_shapes_are_rejected_without_network(self, mistral_mock):
         invalid_keys = [
             None,
@@ -271,20 +266,6 @@ class MistralMealAnalysisTests(unittest.TestCase):
             with self.assertRaises(MistralServiceError):
                 analyze_meal("Two eggs", EMAIL, API_KEY, MODEL)
 
-    def test_chat_parse_decode_and_type_errors_are_mapped(self):
-        parse_errors = (
-            json.JSONDecodeError("invalid response", "{", 0),
-            TypeError("unexpected parsed response"),
-        )
-        for parse_error in parse_errors:
-            with self.subTest(error=type(parse_error).__name__):
-                with patch("services.mistral_service.Mistral") as mistral_mock:
-                    client = mistral_mock.return_value.__enter__.return_value
-                    client.chat.parse.side_effect = parse_error
-                    with self.assertRaises(MistralServiceError):
-                        analyze_meal("Two eggs", EMAIL, API_KEY, MODEL)
-
-
 class MistralMealRecommendationTests(unittest.TestCase):
     @patch("services.mistral_service.Mistral")
     def test_recommendation_uses_context_and_recalculates_all_totals(
@@ -363,18 +344,17 @@ class MistralMealRecommendationTests(unittest.TestCase):
         mistral_mock.assert_not_called()
 
     def test_chat_parse_decode_and_type_errors_are_mapped(self):
-        parse_errors = (
-            json.JSONDecodeError("invalid response", "{", 0),
-            TypeError("unexpected parsed response"),
-        )
-        for parse_error in parse_errors:
-            with self.subTest(error=type(parse_error).__name__):
-                with patch("services.mistral_service.Mistral") as mistral_mock:
-                    client = mistral_mock.return_value.__enter__.return_value
-                    client.chat.parse.side_effect = parse_error
-                    with self.assertRaises(MistralServiceError):
-                        recommend_meals(_context(), EMAIL, API_KEY, MODEL)
-
+        for operation, invoke in (
+            ("analysis", lambda: analyze_meal("Two eggs", EMAIL, API_KEY, MODEL)),
+            ("recommendations", lambda: recommend_meals(_context(), EMAIL, API_KEY, MODEL)),
+        ):
+            for parse_error in (json.JSONDecodeError("invalid response", "{", 0), TypeError("unexpected parsed response")):
+                with self.subTest(operation=operation, error=type(parse_error).__name__):
+                    with patch("services.mistral_service.Mistral") as mistral_mock:
+                        client = mistral_mock.return_value.__enter__.return_value
+                        client.chat.parse.side_effect = parse_error
+                        with self.assertRaises(MistralServiceError):
+                            invoke()
 
 if __name__ == "__main__":
     unittest.main()

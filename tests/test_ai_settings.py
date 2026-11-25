@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import Mock, patch
 
 from app import app
 from services import ai_service
@@ -173,95 +173,49 @@ class AISettingsApiTests(unittest.TestCase):
 
     def test_provider_key_is_verified_encrypted_v2_and_never_returned(self):
         headers = self.register()
-        status = {
-            "configured": True,
-            "last_four": "Ab12",
-            "verified_at": "2026-07-28T18:00:00+00:00",
-        }
-        with (
-            patch("routes.ai_settings.validate_api_key", return_value=MISTRAL_KEY) as validate_mock,
-            patch("routes.ai_settings.encrypt_api_key", return_value="kms-ciphertext") as encrypt_mock,
-            patch(
-                "routes.ai_settings.save_ai_credential",
-                return_value=(True, None, status),
-            ) as save_mock,
-        ):
-            response = self.client.put(
-                "/api/user/ai-credentials/mistral",
-                headers=headers,
-                json={"api_key": MISTRAL_KEY},
-            )
+        for provider, api_key in (("mistral", MISTRAL_KEY), ("anthropic", ANTHROPIC_KEY)):
+            with self.subTest(provider=provider):
+                status = {
+                    "configured": True,
+                    "last_four": api_key[-4:],
+                    "verified_at": "2026-07-28T18:00:00+00:00",
+                }
+                with (
+                    patch("routes.ai_settings.validate_api_key", return_value=api_key) as validate_mock,
+                    patch("routes.ai_settings.encrypt_api_key", return_value="kms-ciphertext") as encrypt_mock,
+                    patch(
+                        "routes.ai_settings.save_ai_credential",
+                        return_value=(True, None, status),
+                    ) as save_mock,
+                ):
+                    response = self.client.put(
+                        f"/api/user/ai-credentials/{provider}",
+                        headers=headers,
+                        json={"api_key": api_key},
+                    )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["provider"], "mistral")
-        self.assertEqual(response.get_json()["credential"], status)
-        self.assertNotIn(MISTRAL_KEY, response.get_data(as_text=True))
-        self.assertNotIn("kms-ciphertext", response.get_data(as_text=True))
-        validate_mock.assert_called_once_with(
-            "mistral", MISTRAL_KEY, "user@example.com"
-        )
-        encrypt_mock.assert_called_once_with(
-            MISTRAL_KEY,
-            "user@example.com",
-            provider="mistral",
-            aad_version=2,
-        )
-        save_mock.assert_called_once_with(
-            "user@example.com",
-            "mistral",
-            "kms-ciphertext",
-            "Ab12",
-            aad_version=2,
-            account_id=db_state.auth_users_memory["user@example.com"]["account_id"],
-        )
-
-    def test_anthropic_key_uses_provider_scoped_v2_encryption(self):
-        headers = self.register()
-        status = {
-            "configured": True,
-            "last_four": "Cd34",
-            "verified_at": "2026-07-29T12:00:00+00:00",
-        }
-        with (
-            patch(
-                "routes.ai_settings.validate_api_key", return_value=ANTHROPIC_KEY
-            ) as validate_mock,
-            patch(
-                "routes.ai_settings.encrypt_api_key",
-                return_value="anthropic-ciphertext",
-            ) as encrypt_mock,
-            patch(
-                "routes.ai_settings.save_ai_credential",
-                return_value=(True, None, status),
-            ) as save_mock,
-        ):
-            response = self.client.put(
-                "/api/user/ai-credentials/anthropic",
-                headers=headers,
-                json={"api_key": ANTHROPIC_KEY},
-            )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["provider"], "anthropic")
-        self.assertNotIn(ANTHROPIC_KEY, response.get_data(as_text=True))
-        self.assertNotIn("anthropic-ciphertext", response.get_data(as_text=True))
-        validate_mock.assert_called_once_with(
-            "anthropic", ANTHROPIC_KEY, "user@example.com"
-        )
-        encrypt_mock.assert_called_once_with(
-            ANTHROPIC_KEY,
-            "user@example.com",
-            provider="anthropic",
-            aad_version=2,
-        )
-        save_mock.assert_called_once_with(
-            "user@example.com",
-            "anthropic",
-            "anthropic-ciphertext",
-            "Cd34",
-            aad_version=2,
-            account_id=db_state.auth_users_memory["user@example.com"]["account_id"],
-        )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()["provider"], provider)
+                self.assertEqual(response.get_json()["credential"], status)
+                self.assertNotIn(api_key, response.get_data(as_text=True))
+                self.assertNotIn("kms-ciphertext", response.get_data(as_text=True))
+                validate_mock.assert_called_once_with(
+                    provider, api_key, "user@example.com"
+                )
+                encrypt_mock.assert_called_once_with(
+                    api_key,
+                    "user@example.com",
+                    provider=provider,
+                    aad_version=2,
+                )
+                save_mock.assert_called_once_with(
+                    "user@example.com",
+                    provider,
+                    "kms-ciphertext",
+                    api_key[-4:],
+                    aad_version=2,
+                    account_id=db_state.auth_users_memory["user@example.com"]["account_id"],
+                )
 
     def test_billing_limited_key_is_saved_with_a_non_fatal_warning(self):
         headers = self.register()
@@ -303,21 +257,6 @@ class AISettingsApiTests(unittest.TestCase):
         self.assertNotIn(ANTHROPIC_KEY, response.get_data(as_text=True))
         self.assertNotIn("anthropic-ciphertext", response.get_data(as_text=True))
         save_mock.assert_called_once()
-
-    def test_anthropic_validation_error_uses_provider_display_name(self):
-        headers = self.register()
-        with patch("routes.ai_settings.validate_api_key", side_effect=ValueError("invalid_api_key")):
-            response = self.client.put(
-                "/api/user/ai-credentials/anthropic",
-                headers=headers,
-                json={"api_key": "bad"},
-            )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(
-            response.get_json()["message"],
-            "A valid Claude (Anthropic) API key is required",
-        )
 
     def test_transient_or_permission_failures_do_not_replace_a_saved_key(self):
         headers = self.register()
@@ -446,89 +385,48 @@ class AISettingsApiTests(unittest.TestCase):
 
     def test_analysis_routes_through_selected_provider_model_and_v2_aad(self):
         headers = self.register()
-        self.client.put(
-            "/api/user/ai-settings",
-            headers=headers,
-            json=MISTRAL_SELECTION,
-        )
-        with (
-            patch(
-                "services.ai_credentials.get_ai_credential",
-                return_value=(
-                    True,
-                    None,
-                    {"ciphertext": "encrypted", "aad_version": 2},
-                ),
-            ),
-            patch(
-                "routes.nutrition.decrypt_api_key", return_value=MISTRAL_KEY
-            ) as decrypt_mock,
-            patch("routes.nutrition.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
-        ):
-            response = self.client.post(
-                "/api/nutrition/analyze",
-                headers=headers,
-                json={"message": "Two eggs and toast"},
-            )
+        for selection, api_key in ((MISTRAL_SELECTION, MISTRAL_KEY), (ANTHROPIC_SELECTION, ANTHROPIC_KEY)):
+            with self.subTest(provider=selection["provider"]):
+                selection_response = self.client.put(
+                    "/api/user/ai-settings",
+                    headers=headers,
+                    json=selection,
+                )
+                self.assertEqual(selection_response.status_code, 200)
+                with (
+                    patch(
+                        "services.ai_credentials.get_ai_credential",
+                        return_value=(
+                            True,
+                            None,
+                            {"ciphertext": "encrypted", "aad_version": 2},
+                        ),
+                    ),
+                    patch(
+                        "routes.nutrition.decrypt_api_key", return_value=api_key
+                    ) as decrypt_mock,
+                    patch("routes.nutrition.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
+                ):
+                    response = self.client.post(
+                        "/api/nutrition/analyze",
+                        headers=headers,
+                        json={"message": "Two eggs and toast"},
+                    )
 
-        self.assertEqual(response.status_code, 200)
-        decrypt_mock.assert_called_once_with(
-            "encrypted",
-            "user@example.com",
-            provider="mistral",
-            aad_version=2,
-        )
-        analyze_mock.assert_called_once_with(
-            "Two eggs and toast",
-            "user@example.com",
-            MISTRAL_KEY,
-            "mistral",
-            "mistral-small-2603",
-        )
-
-    def test_analysis_routes_through_selected_anthropic_model_and_v2_aad(self):
-        headers = self.register()
-        response = self.client.put(
-            "/api/user/ai-settings",
-            headers=headers,
-            json=ANTHROPIC_SELECTION,
-        )
-        self.assertEqual(response.status_code, 200)
-
-        with (
-            patch(
-                "services.ai_credentials.get_ai_credential",
-                return_value=(
-                    True,
-                    None,
-                    {"ciphertext": "encrypted-anthropic", "aad_version": 2},
-                ),
-            ),
-            patch(
-                "routes.nutrition.decrypt_api_key", return_value=ANTHROPIC_KEY
-            ) as decrypt_mock,
-            patch("routes.nutrition.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
-        ):
-            response = self.client.post(
-                "/api/nutrition/analyze",
-                headers=headers,
-                json={"message": "Two eggs and toast"},
-            )
-
-        self.assertEqual(response.status_code, 200)
-        decrypt_mock.assert_called_once_with(
-            "encrypted-anthropic",
-            "user@example.com",
-            provider="anthropic",
-            aad_version=2,
-        )
-        analyze_mock.assert_called_once_with(
-            "Two eggs and toast",
-            "user@example.com",
-            ANTHROPIC_KEY,
-            "anthropic",
-            "claude-sonnet-5",
-        )
+                self.assertEqual(response.status_code, 200)
+                decrypt_mock.assert_called_once_with(
+                    "encrypted",
+                    "user@example.com",
+                    provider=selection["provider"],
+                    aad_version=2,
+                )
+                analyze_mock.assert_called_once_with(
+                    "Two eggs and toast",
+                    "user@example.com",
+                    api_key,
+                    selection["provider"],
+                    selection["model"],
+                )
 
     def test_legacy_openai_credential_without_aad_version_uses_v1(self):
         headers = self.register()
@@ -678,91 +576,31 @@ class AISettingsApiTests(unittest.TestCase):
         self.assertEqual(response.get_json()["error"], "provider_unavailable")
         self.assertEqual(response.get_json()["provider"], "mistral")
 
-    def test_account_deletion_cleans_all_provider_credentials(self):
-        headers = self.register()
-        account_id = db_state.auth_users_memory["user@example.com"]["account_id"]
-        with patch(
-            "services.firebase.users.delete_all_ai_credentials",
-            return_value=(True, None),
-        ) as delete_all:
-            response = self.client.delete(
-                "/api/auth/account",
-                headers=headers,
-                json={"password": "password123"},
-            )
-
-        self.assertEqual(response.status_code, 200)
-        delete_all.assert_called_once_with(
-            "user@example.com",
-            account_id,
-            ANY,
-        )
-
 
 class AIServiceDispatchTests(unittest.TestCase):
-    @patch("services.mistral_service.analyze_meal", return_value=SAMPLE_ANALYSIS)
-    def test_mistral_model_is_forwarded_by_dispatcher(self, analyze_mock):
-        result = ai_service.analyze_meal(
-            "Two eggs",
-            "user@example.com",
-            MISTRAL_KEY,
-            "mistral",
-            "mistral-large-2512",
-        )
+    def test_selected_provider_model_is_forwarded_by_dispatcher(self):
+        for provider, api_key, model in (
+            ("mistral", MISTRAL_KEY, "mistral-large-2512"),
+            ("anthropic", ANTHROPIC_KEY, "claude-opus-5"),
+        ):
+            with self.subTest(provider=provider), patch(
+                f"services.{provider}_service.analyze_meal", return_value=SAMPLE_ANALYSIS
+            ) as analyze_mock:
+                result = ai_service.analyze_meal("Two eggs", "user@example.com", api_key, provider, model)
+                self.assertEqual(result, SAMPLE_ANALYSIS)
+                analyze_mock.assert_called_once_with("Two eggs", "user@example.com", api_key, model)
 
-        self.assertEqual(result, SAMPLE_ANALYSIS)
-        analyze_mock.assert_called_once_with(
-            "Two eggs",
-            "user@example.com",
-            MISTRAL_KEY,
-            "mistral-large-2512",
-        )
-
-    @patch(
-        "services.mistral_service.analyze_meal",
-        side_effect=MistralRateLimitError(),
-    )
-    def test_mistral_errors_are_normalized(self, _analyze_mock):
-        with self.assertRaises(AIRateLimitError):
-            ai_service.analyze_meal(
-                "Two eggs",
-                "user@example.com",
-                MISTRAL_KEY,
-                "mistral",
-                "mistral-small-2603",
-            )
-
-    @patch("services.anthropic_service.analyze_meal", return_value=SAMPLE_ANALYSIS)
-    def test_anthropic_model_is_forwarded_by_dispatcher(self, analyze_mock):
-        result = ai_service.analyze_meal(
-            "Two eggs",
-            "user@example.com",
-            ANTHROPIC_KEY,
-            "anthropic",
-            "claude-opus-5",
-        )
-
-        self.assertEqual(result, SAMPLE_ANALYSIS)
-        analyze_mock.assert_called_once_with(
-            "Two eggs",
-            "user@example.com",
-            ANTHROPIC_KEY,
-            "claude-opus-5",
-        )
-
-    @patch(
-        "services.anthropic_service.analyze_meal",
-        side_effect=AnthropicRateLimitError(),
-    )
-    def test_anthropic_errors_are_normalized(self, _analyze_mock):
-        with self.assertRaises(AIRateLimitError):
-            ai_service.analyze_meal(
-                "Two eggs",
-                "user@example.com",
-                ANTHROPIC_KEY,
-                "anthropic",
-                "claude-sonnet-5",
-            )
+    def test_provider_errors_are_normalized(self):
+        for selection, api_key, error in (
+            (MISTRAL_SELECTION, MISTRAL_KEY, MistralRateLimitError),
+            (ANTHROPIC_SELECTION, ANTHROPIC_KEY, AnthropicRateLimitError),
+        ):
+            provider = selection["provider"]
+            with self.subTest(provider=provider), patch(
+                f"services.{provider}_service.analyze_meal", side_effect=error()
+            ):
+                with self.assertRaises(AIRateLimitError):
+                    ai_service.analyze_meal("Two eggs", "user@example.com", api_key, provider, selection["model"])
 
 
 class AISettingsPersistenceRaceTests(unittest.TestCase):

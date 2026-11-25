@@ -7,10 +7,11 @@ history entry holding the full resulting snapshot, so any version can be restore
 
 import copy
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from firebase_admin import firestore
 
-from core.finance_rules import evaluate_rows, find_conflicts
+from core.finance_rules import ROW_FIELDS, evaluate_rows, find_conflicts, validate_fields
 from core.finance_rules_csv import parse_rules_csv, rules_to_csv, rules_to_json_payload
 from . import db_state
 from .account_state import ACCOUNT_DELETION_FIELD, ACCOUNT_DELETION_TOKEN_FIELD, account_id_matches
@@ -166,6 +167,9 @@ def update_rule(email, account_id, rule_id, data, actor):
         updates = {key: value for key, value in data.items() if key != "revision" and value is not None}
         rule = dict(existing)
         rule.update(updates)
+        _clean, errors, _review = validate_fields(rule)
+        if errors:
+            raise FinanceError("Rule validation failed", 400, details=errors)
         rule["revision"] = existing.get("revision", 0) + 1
         rule["updated_at"] = _now()
         if "action" in updates or "status" in updates:
@@ -301,6 +305,23 @@ def test_rules(email, account_id, rows, rule_ids=None):
     for row in rows:
         if not isinstance(row, dict) or len(row) > 32 or any(not isinstance(key, str) or len(key) > 64 for key in row):
             raise FinanceError("each row must be an object of at most 32 named fields", 400)
+        for field, value in row.items():
+            if value is None:
+                continue
+            if field in ("amount_eur", "fee_eur"):
+                try:
+                    number = Decimal(str(value))
+                    if not number.is_finite():
+                        raise ValueError
+                    number.quantize(Decimal("0.01"))
+                except (InvalidOperation, ValueError):
+                    raise FinanceError(f"{field} must be a finite number", 400) from None
+            elif field in ROW_FIELDS and not isinstance(value, str):
+                raise FinanceError(f"{field} must be text", 400)
+            elif field == "row" and (not isinstance(value, int) or isinstance(value, bool)):
+                raise FinanceError("row must be an integer", 400)
+            elif not isinstance(value, (str, int, float, bool)):
+                raise FinanceError("sample row values must be text, numbers, booleans or null", 400)
     if rule_ids is not None and (not isinstance(rule_ids, list) or any(not isinstance(item, str) for item in rule_ids)):
         raise FinanceError("rule_ids must be a list of rule IDs", 400)
 
