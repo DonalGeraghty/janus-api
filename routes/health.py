@@ -57,6 +57,8 @@ def root():
             "finance_net_worth": "GET /api/finance/net-worth",
             "finance_sinking_funds": "GET /api/finance/sinking-funds",
             "finance_budgets": "GET /api/finance/budgets",
+            "finance_budget_context": "GET /api/finance/budget/context",
+            "finance_budget_plan": "POST /api/finance/budget/plan {notes, cushion_eur, corrections}",
             "finance_chat": "POST /api/finance/chat {message, history}",
             "finance_rules": "GET/POST /api/finance/rules; PUT/DELETE /api/finance/rules/{rule_id}",
             "finance_rules_import": "POST /api/finance/rules/import (preview or commit)",

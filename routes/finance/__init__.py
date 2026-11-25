@@ -4,4 +4,4 @@ Importing handlers registers them on the shared blueprint exactly once.
 """
 
 from .shared import blueprint
-from . import connection, rules, reports, chat
+from . import connection, rules, reports, chat, budget

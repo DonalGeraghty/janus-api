@@ -8,6 +8,14 @@ Read API: every endpoint reads one pinned snapshot (meta carries `snapshot_id` +
 
 Finance chat: `POST /api/finance/chat` requires a synced snapshot and the account's selected, KMS-stored AI credential. The backend runs the read-only tool registry (`core/finance/chat.py`) itself and sends the bounded pack (<=24 KiB) with the question to the chosen provider — the model never calculates and all financial text is treated as data. Responses carry snapshot/rule-set metadata, coverage, stale flag and a privacy note; they are `no-store` and never logged.
 
+## Monthly AI budget planning
+
+Minerva's Budget tab reads `GET /api/finance/budget/context` for the current Dublin calendar month plus six complete prior months. Context uses canonical rule-adjusted amounts, monthly categories, bounded merchant/payment-day patterns and recent transactions, coverage gaps, and a dated cash snapshot when recognized. Existing cash reserves are never added as income. Context is bounded to 60 KiB; truncation is disclosed and oversized category histories fail explicitly.
+
+`POST /api/finance/budget/plan` accepts `{notes, cushion_eur, corrections}` and uses the account's selected OpenAI, Mistral or Anthropic credential. The LLM infers likely remaining income, bills, seasonal costs and three approaches (Save more, Balanced, More breathing room). Strict JSON validation checks complete current categories, correction fidelity, dates, monotonic limits, fixed-cost consistency and bill reserves. Janus computes every monthly limit, savings figure and funding gap using Decimal. A changed import, connection or rule set during inference rejects publication; stale data requires a successful import first. Prompts, answers and plans are not stored by Janus and responses are no-store. Minerva keeps the selected plan only in its account-scoped browser session.
+
+The original `/api/finance/budgets` endpoint still describes availability of verified workbook budgets; AI suggestions are a separate planning feature. The local demo returns an explicitly illustrative synthetic plan without calling a provider.
+
 ## Retired flashcard functionality
 
 Minerva now uses its finance dashboard and Account pages. The former flashcard CRUD/due/review endpoints, `POST /api/minerva/respond`, and `GET/PUT /api/user/minerva-settings` are removed and return 404. Card drafting prompts, provider methods, scheduling, and operational card storage code are removed too.

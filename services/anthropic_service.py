@@ -287,12 +287,12 @@ def recommend_meals(context, email, api_key, model=None):
     return result
 
 
-def finance_chat(system, messages, email, api_key, model=None):
+def finance_chat(system, messages, email, api_key, model=None, max_tokens=4000):
     try:
         with Anthropic(api_key=api_key, max_retries=GENERATION_MAX_RETRIES, timeout=GENERATION_TIMEOUT_SECONDS) as client:
             response = client.messages.create(
                 model=_model_name(model),
-                max_tokens=4000,
+                max_tokens=max_tokens,
                 system=system,
                 messages=list(messages),
             )
@@ -302,3 +302,7 @@ def finance_chat(system, messages, email, api_key, model=None):
         return text.strip()
     except (AnthropicError, ValidationError, json.JSONDecodeError, TypeError) as error:
         _raise_mapped_anthropic_error(error)
+
+
+def finance_budget(system, messages, email, api_key, model=None):
+    return finance_chat(system, messages, email, api_key, model, max_tokens=10000)
