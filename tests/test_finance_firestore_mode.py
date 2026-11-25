@@ -4,6 +4,7 @@ The in-memory fallback is covered elsewhere; these tests drive the
 users_collection_ref / db branches so Firestore-only bugs surface.
 """
 import copy
+import os
 import unittest
 from unittest.mock import patch
 
@@ -157,6 +158,24 @@ class FinanceFirestoreModeTests(unittest.TestCase):
         with_deleted = self.client.get("/api/finance/rules?include_deleted=true", headers=self.headers).get_json()["rules"]
         self.assertEqual({r["rule_id"]: r["status"] for r in with_deleted if r["rule_id"] in ("A01", "A05")},
                          {"A01": "deleted", "A05": "deleted"})
+        # Exercise the production transaction path for an approved, keyless migration.
+        from core.finance_sheets import HEADER_TO_FIELD
+        reader = patch.dict(os.environ, {"FINANCE_SHEETS_SERVICE_ACCOUNT": "reader@synthetic-project.iam.gserviceaccount.com"})
+        reader.start()
+        self.addCleanup(reader.stop)
+        settings = STORE["users/owner@example.com/finance_settings/settings"]
+        approval = {"account_id": "wrong-generation", "workbook_id": "synthetic_finance_workbook_0123456789abcdef"}
+        settings["finance_service_account_approval"] = approval
+        body = {"mode": "service_account", "workbook_id": approval["workbook_id"]}
+        with (patch("services.sheets_identity.access_token", return_value="synthetic-short-token"),
+              patch("services.google_sheets.fetch_values", return_value=[list(HEADER_TO_FIELD)]) as fetch):
+            self.assertEqual(self.client.put("/api/finance/connection", headers=self.headers, json=body).status_code, 403)
+            fetch.assert_not_called()
+            approval["account_id"] = "acc-1"
+            result = self.client.put("/api/finance/connection", headers=self.headers, json=body)
+            self.assertEqual(result.status_code, 200, result.json)
+        self.assertNotIn("ciphertext", STORE["users/owner@example.com/private/finance"])
+        self.assertEqual(self.client.get("/api/finance/rules", headers=self.headers).status_code, 200)
         # delete + disconnect
         self.assertEqual(self.client.delete("/api/finance/rules/A05?revision=1", headers=self.headers).status_code, 200)
         result = self.client.delete("/api/finance/connection", headers=self.headers)

@@ -60,7 +60,7 @@ def _cap(items, limit):
 
 
 def tool_financial_summary(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return {"available": False, "reason": "sync_required"}
     rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
@@ -74,7 +74,7 @@ def tool_financial_summary(email, account_id, _args):
 
 
 def tool_transactions(email, account_id, args):
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return {"available": False, "reason": "sync_required"}
     rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
@@ -91,7 +91,7 @@ def tool_transactions(email, account_id, args):
 
 
 def tool_spending_by_category(email, account_id, args):
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return {"available": False, "reason": "sync_required"}
     rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
@@ -101,7 +101,7 @@ def tool_spending_by_category(email, account_id, args):
 
 
 def tool_spending_by_merchant(email, account_id, args):
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return {"available": False, "reason": "sync_required"}
     rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
@@ -111,7 +111,7 @@ def tool_spending_by_merchant(email, account_id, args):
 
 
 def tool_monthly_cashflow(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return {"available": False, "reason": "sync_required"}
     rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
@@ -121,7 +121,7 @@ def tool_monthly_cashflow(email, account_id, _args):
 
 
 def tool_compare_periods(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return {"available": False, "reason": "sync_required"}
     rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
@@ -136,7 +136,7 @@ def tool_budget_status(email, _account_id, _args):
 
 
 def tool_sinking_fund_status(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return {"available": False, "reason": "sync_required"}
     rules = list_rules(email, account_id, scope="janus", status="active")["rules"]
@@ -144,8 +144,8 @@ def tool_sinking_fund_status(email, account_id, _args):
     return finance_calc.sinking_ledger(rows)
 
 
-def tool_net_worth(email, _account_id, _args):
-    snapshot = finance_sync.get_snapshot(email)
+def tool_net_worth(email, account_id, _args):
+    snapshot = finance_sync.get_snapshot(email, account_id)
     if snapshot is None:
         return {"available": False, "reason": "sync_required"}
     worth = finance_calc.parse_net_worth(snapshot.get("snapshot_grid"))
@@ -161,7 +161,7 @@ def tool_financial_rules(email, account_id, _args):
 
 
 def tool_data_quality_status(email, account_id, _args):
-    snapshot = finance_sync.get_snapshot(email)
+    snapshot = finance_sync.get_snapshot(email, account_id)
     status = finance_sync.sync_status(email, account_id)
     if snapshot is None:
         return {"sync_required": True, **status}

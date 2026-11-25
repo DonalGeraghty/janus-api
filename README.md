@@ -2,7 +2,7 @@
 
 Janus API is the shared backend for three sibling frontends — [Aether](https://github.com/DonalGeraghty/aether) (habits), [Minerva](https://github.com/DonalGeraghty/minerva) (personal finance), and [Nyx](https://github.com/DonalGeraghty/nyx) (nutrition). It provides authentication, encrypted per-user AI credentials, selectable AI models, habit drafting and tracking, meal analysis, finance rules and read-only Sheets access, and account-owned storage.
 
-Read-only ledger sync: `POST /api/finance/sync` reads the account's workbook (`combined data` A:Q) with the stored read-only token, mapping columns by header name. Sheets native values are parsed explicitly (1900-system serial dates, native numerics); money is handled as `Decimal` and serialized as decimal strings with `currency: EUR`, timezone `Europe/Dublin`; unknown values stay null, never zero. Snapshots are derived, in-memory and per-account: one sync lock per account, atomic swap on success, and a failed or rejected sync retains the last good snapshot with `stale: true` (a 401/403 from Google maps to 409 `sheets_reconnect_required`). After a restart the status endpoint reports `sync_required` rather than empty data. The snapshot cache is never shared across instances or treated as durable; a private Cloud Storage snapshot is the follow-up if multi-instance stability is required. Janus never writes to the workbook.
+Read-only ledger sync: `POST /api/finance/sync` reads the account's workbook (`combined data` A:Q) with an automatically refreshed service-account token (or an existing legacy token), mapping columns by header name. Sheets native values are parsed explicitly (1900-system serial dates, native numerics); money is handled as `Decimal` and serialized as decimal strings with `currency: EUR`, timezone `Europe/Dublin`; unknown values stay null, never zero. Snapshots are derived, in-memory and per-account: one sync lock per account, atomic swap on success, and a failed or rejected sync retains the last good snapshot with `stale: true` (a 401/403 from Google maps to 409 `sheets_reconnect_required`). After a restart the status endpoint reports `sync_required` rather than empty data. The snapshot cache is never shared across instances or treated as durable; a private Cloud Storage snapshot is the follow-up if multi-instance stability is required. Janus never writes to the workbook.
 
 Read API: every endpoint reads one pinned snapshot (meta carries `snapshot_id` + `rule_set_version`; no mixed versions) and requires a prior successful sync (`409 sync_required` otherwise). Periods are whole calendar months in Europe/Dublin (`this_month` default, `last_month`, `last_3/6/12` including current, `ytd`, `all`, or custom `start`/`end`); missing months are reported as gaps, never zeros. Budget math sums signed Amount EUR for Income/Expense/Refund with inclusion YES, applies active rules deterministically (priority desc, rule_id asc; first match per independent effect wins) with per-row reasons, excludes transfers/savings/Food Pot from budget cash flow, reports investment principal separately, never subtracts Fee EUR twice, counts receipt groups once, and enforces duplicate/failed/reverted exclusions in code regardless of rules. The sinking fund keeps a stateful recognised-balance ledger across all history; unknown opening recognition blocks unsupported exclusions and is flagged provisional. Money is Decimal, serialized as decimal strings in EUR.
 
@@ -18,13 +18,39 @@ Deploy the updated Minerva frontend before retiring the backend endpoints if old
 
 ## Finance rules (Minerva finance migration)
 
-Janus hosts each account's own finance rule set and (later) read-only access to that account's Google Sheets workbook, used by Minerva's finance dashboard. Finance access is separate from the shared login and uses the same per-account model as the AI provider keys: a valid bearer token alone is insufficient — the account must first store its own Google OAuth access token (read-only Sheets scope) via `PUT /api/finance/connection`. The token is KMS-encrypted with account/purpose-bound AAD under `users/{email}/private/finance`; only non-secret metadata (workbook ID, last four characters, timestamps) is ever returned. Until a connection exists, every other `/api/finance/*` route returns `403 finance_not_connected`. All finance responses are `Cache-Control: no-store`. The external Google Sheet stays canonical; Janus never writes to it.
+Finance access requires an account-owned connection. New connections use a dedicated Sheets service account and an administrator-approved workbook binding for the exact Janus account generation. The shared reader's Google access does not authorize other Janus users to connect to a workbook. Existing KMS-encrypted token connections keep working until a successful migration replaces their token document with metadata only. Google Sheets remains authoritative; Janus only reads it. All finance responses are `Cache-Control: no-store`.
+
+### Keyless Google Sheets setup
+
+Run once as a Google Cloud administrator from the repository root:
+
+```powershell
+python scripts/setup_sheets_reader.py --project YOUR_PROJECT --developer-email YOUR_GOOGLE_LOGIN
+```
+
+This discovers Janus's current Cloud Run runtime identity, creates `minerva-sheets-reader` if needed, enables the Sheets/IAM Credentials APIs, and grants Token Creator to the runtime and optional developer **on the reader account only**. It creates no key files and performs no deployment. The reader needs no project-wide data role. Share the specific spreadsheet with its email as **Viewer**.
+
+Approve the private workbook for an existing Janus account. The command prompts for the Janus login email and spreadsheet link; neither belongs in source control:
+
+```powershell
+gcloud auth application-default login
+gcloud auth application-default set-quota-project YOUR_PROJECT
+python scripts/approve_finance_workbook.py --project YOUR_PROJECT
+```
+
+Approval stores the current account ID and workbook ID under the account's `finance_settings/settings` document. Clients cannot create approvals. Recreating an account requires fresh approval. To switch workbooks, approve the replacement first. Disconnect retains approval and rules; revoking Google access separately requires removing the reader from the Sheet's sharing settings.
+
+Configure `FINANCE_SHEETS_SERVICE_ACCOUNT=minerva-sheets-reader@YOUR_PROJECT.iam.gserviceaccount.com`. Cloud Run's attached identity impersonates the reader. Locally, `gcloud auth application-default login` supplies the developer identity; it needs Token Creator on the reader. Python's google-auth requests only the `spreadsheets.readonly` target scope and refreshes credentials on demand. The deployment workflow configures the reader email for its project. Provision the reader before deploying this change. Synthetic demo mode still needs no cloud credentials.
+
+Account displays the reader email with a Copy button and accepts a spreadsheet link or ID. Connecting checks approval **before** calling Google, verifies the combined-data header, then replaces the connection. Failed verification preserves the existing connection. The frontend starts a full import after connecting and confirms completion separately.
+
+Snapshots and sync statuses are bound to the account generation, workbook, connection ID and reader identity. Replacing/disconnecting invalidates derived data; an in-flight import rechecks its binding before publication, and every read verifies its snapshot still belongs to the current connection. Removed approvals deny service-account access. Historical accounting, receipt allocation and Ask-context improvements remain separate follow-ups.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/finance/connection` | Safe connection metadata (`connected`, `workbook_id`, `last_four`) |
-| `PUT` | `/api/finance/connection` | Validate and KMS-encrypt `{ "access_token": "...", "workbook_id": "..." }` |
-| `DELETE` | `/api/finance/connection` | Remove the stored token; saved rules and metadata are retained |
+| `GET` | `/api/finance/connection` | Safe connection metadata and service-account setup/approval status |
+| `PUT` | `/api/finance/connection` | Verify `{ "mode": "service_account", "workbook_id": "Sheet link or ID" }`; legacy token requests remain supported |
+| `DELETE` | `/api/finance/connection` | Disconnect and clear imported data; saved rules and approval are retained |
 | `POST` | `/api/finance/sync` | Pull `combined data` A:Q via Sheets API (UNFORMATTED_VALUE), validate, atomically publish an in-memory snapshot; failed sync keeps last good data with `stale` |
 | `GET` | `/api/finance/sync/status` | Last success/attempt, snapshot ID, rule-set version, stale flag, coverage (months, cutoff) and `sync_required` after restart |
 | `GET` | `/api/finance/transactions` | Filtered, paginated, bounded rows with per-row rule reason; `period` preset or `start`/`end` whole months |

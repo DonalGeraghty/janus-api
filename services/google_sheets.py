@@ -1,4 +1,4 @@
-"""Minimal Google Sheets API v4 client using the account's stored OAuth token.
+"""Minimal Google Sheets API v4 client using a server-supplied access token.
 
 Read-only by construction: only GET values endpoints are used. Upstream failures
 become safe SheetsError codes; the token itself never leaves the server.
