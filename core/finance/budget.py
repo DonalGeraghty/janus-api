@@ -10,6 +10,8 @@ from .budget_models import Category, Limits, Proposal
 from .sheets import parse_date, parse_money
 
 MODES = ("save_more", "balanced", "breathing_room")
+PRIVACY_NOTE = ('Current-month and six months of historical financial evidence are sent to your '
+                "selected AI provider to assess this plan. Review the provider's privacy settings.")
 
 
 def money(value):

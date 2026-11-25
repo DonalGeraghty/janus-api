@@ -5,7 +5,6 @@ from flask import current_app, g, jsonify, request
 from pydantic import ValidationError
 
 from core.finance import budget as planner
-from core.finance.chat import PRIVACY_NOTE
 from services import ai_service
 from services.ai_credentials import selected_ai_credential, stored_credential_aad_version
 from services.ai_errors import AIAuthenticationError, AIAuthorizationError, AIBillingError, AIRateLimitError, AIResponseValidationError, AIServiceError
@@ -76,7 +75,7 @@ def budget_plan():
             plan = planner.validate_plan(raw, context)
             return jsonify(status='success', plan=plan, context=context,
                 meta={**meta, **selection, 'generated_at': datetime.now(timezone.utc).isoformat(),
-                      'privacy': PRIVACY_NOTE, 'demo': demo, 'repair_attempted': attempt > 0})
+                      'privacy': planner.PRIVACY_NOTE, 'demo': demo, 'repair_attempted': attempt > 0})
         except AIResponseValidationError as error:
             reason = str(error)
         except (ValueError, ValidationError) as error:

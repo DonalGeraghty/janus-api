@@ -274,23 +274,6 @@ def recommend_meals(context, email, api_key, model=None):
     return result
 
 
-def finance_chat(system, messages, email, api_key, model=None, max_tokens=4000):
-    try:
-        with Anthropic(api_key=api_key, max_retries=GENERATION_MAX_RETRIES, timeout=GENERATION_TIMEOUT_SECONDS) as client:
-            response = client.messages.create(
-                model=_model_name(model),
-                max_tokens=max_tokens,
-                system=system,
-                messages=list(messages),
-            )
-        text = "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
-        if not text.strip():
-            raise AnthropicServiceError("Anthropic returned no answer")
-        return text.strip()
-    except (AnthropicError, ValidationError, json.JSONDecodeError, TypeError) as error:
-        _raise_mapped_anthropic_error(error)
-
-
 def finance_budget(system, messages, email, api_key, model=None):
     from core.finance.budget_models import Proposal
     from .ai_errors import AIResponseValidationError
@@ -304,4 +287,21 @@ def finance_budget(system, messages, email, api_key, model=None):
     except (ValidationError, json.JSONDecodeError, TypeError):
         raise AIResponseValidationError('The provider returned an invalid budget structure.') from None
     except AnthropicError as error:
+        _raise_mapped_anthropic_error(error)
+
+
+def finance_agent_turn(system, messages, tools, email, api_key, model=None, tools_enabled=True, timeout=20):
+    from .ai_tools import AgentTurn, ToolCall
+    try:
+        with Anthropic(api_key=api_key, max_retries=0, timeout=timeout) as client:
+            response = client.messages.create(model=_model_name(model), max_tokens=4000,
+                system=system, messages=list(messages),
+                tools=[{'name': tool['name'], 'description': tool['description'], 'input_schema': tool['parameters']} for tool in tools],
+                tool_choice={'type': 'auto' if tools_enabled else 'none'})
+        if response.stop_reason in ('refusal', 'max_tokens'):
+            raise AnthropicServiceError('Incomplete finance agent response')
+        calls = [ToolCall(block.id, block.name, block.input) for block in response.content if block.type == 'tool_use']
+        text = ''.join(block.text for block in response.content if block.type == 'text')
+        return AgentTurn(text=text, calls=calls, continuation=[{'role': 'assistant', 'content': response.content}])
+    except (AnthropicError, ValidationError, json.JSONDecodeError, TypeError) as error:
         _raise_mapped_anthropic_error(error)

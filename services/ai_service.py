@@ -124,15 +124,12 @@ def recommend_meals(context, email, api_key, provider="openai", model=None):
     )
 
 
-def finance_chat(system, messages, email, api_key, provider="openai", model=None):
-    """Finance Q&A over a server-computed context pack; the model never calculates."""
-    if not is_supported_provider(provider):
-        raise ValueError("invalid_provider")
-    return _call_provider(provider, "finance_chat", system, messages, email, api_key,
-                          _validated_model(provider, model))
-
-
 def finance_budget(system, messages, email, api_key, provider="openai", model=None):
     """Budget JSON can contain three approaches and evidence for many categories."""
     return _call_provider(provider, "finance_budget", system, messages, email, api_key,
                           _validated_model(provider, model))
+
+
+def finance_agent_turn(system, messages, tools, email, api_key, provider='openai', model=None, tools_enabled=True, timeout=20):
+    return _call_provider(provider, 'finance_agent_turn', system, messages, tools, email, api_key,
+                          _validated_model(provider, model), tools_enabled=tools_enabled, timeout=timeout)

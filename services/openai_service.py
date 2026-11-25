@@ -279,24 +279,6 @@ def recommend_meals(context, email, api_key, model=None):
     return result
 
 
-def finance_chat(system, messages, email, api_key, model=None):
-    """Plain-text finance answer; all figures arrive pre-computed in messages."""
-    try:
-        response = OpenAI(api_key=api_key).responses.create(
-            model=_model_name(model),
-            input=[{"role": "system", "content": system}] + list(messages),
-            safety_identifier=_safety_identifier(email),
-            store=False,
-        )
-        text = getattr(response, "output_text", None)
-        if not isinstance(text, str) or not text.strip():
-            raise OpenAIServiceError("OpenAI returned no answer")
-        return text.strip()
-    except (AuthenticationError, PermissionDeniedError, RateLimitError, APIConnectionError,
-            APITimeoutError, APIStatusError, ValidationError, json.JSONDecodeError, TypeError) as error:
-        _raise_mapped_openai_error(error)
-
-
 def finance_budget(system, messages, email, api_key, model=None):
     from core.finance.budget_models import Proposal
     from .ai_errors import AIResponseValidationError
@@ -311,4 +293,23 @@ def finance_budget(system, messages, email, api_key, model=None):
     except (ValidationError, json.JSONDecodeError, TypeError):
         raise AIResponseValidationError('The provider returned an invalid budget structure.') from None
     except (AuthenticationError, PermissionDeniedError, RateLimitError, APIConnectionError, APITimeoutError, APIStatusError) as error:
+        _raise_mapped_openai_error(error)
+
+
+def finance_agent_turn(system, messages, tools, email, api_key, model=None, tools_enabled=True, timeout=20):
+    """One stateless Responses API turn, preserving reasoning/tool output items."""
+    from .ai_tools import AgentTurn, ToolCall
+    try:
+        response = OpenAI(api_key=api_key, timeout=timeout, max_retries=0).responses.create(
+            model=_model_name(model), input=[{'role': 'system', 'content': system}] + list(messages),
+            tools=[{'type': 'function', **tool, 'strict': False} for tool in tools],
+            tool_choice='auto' if tools_enabled else 'none', max_output_tokens=4000,
+            include=['reasoning.encrypted_content'], safety_identifier=_safety_identifier(email), store=False)
+        if getattr(response, 'status', None) == 'incomplete':
+            raise OpenAIServiceError('Incomplete finance agent response')
+        output = response.output
+        calls = [ToolCall(item.call_id, item.name, item.arguments) for item in output if item.type == 'function_call']
+        return AgentTurn(text=response.output_text or '', calls=calls, continuation=list(output))
+    except (AuthenticationError, PermissionDeniedError, RateLimitError, APIConnectionError,
+            APITimeoutError, APIStatusError, ValidationError, json.JSONDecodeError, TypeError) as error:
         _raise_mapped_openai_error(error)

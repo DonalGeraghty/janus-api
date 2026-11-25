@@ -4,10 +4,8 @@ from flask import g, jsonify, request
 from pydantic import ValidationError
 
 from core.finance.chat import (
-    PRIVACY_NOTE, SYSTEM_PROMPT, build_context_pack, build_user_content,
-    sanitize_history, sanitize_message,
+    run_finance_agent, sanitize_history, sanitize_message,
 )
-from services import ai_service
 from services.finance import sync as finance_sync
 from services.ai_credentials import selected_ai_credential, stored_credential_aad_version
 from services.ai_errors import (
@@ -50,10 +48,8 @@ def chat():
     except (CredentialConfigurationError, CredentialEncryptionError):
         return jsonify(status="error", error="credential_service_unavailable",
                        message="Secure credential storage is unavailable."), 503
-    pack = build_context_pack(email, account_id)
-    messages = history + [{"role": "user", "content": build_user_content(message, pack)}]
     try:
-        answer = ai_service.finance_chat(SYSTEM_PROMPT, messages, email, api_key, provider, selection["model"])
+        answer, meta = run_finance_agent(message, history, identity, api_key, selection)
     except (AIAuthenticationError, AIAuthorizationError, AIBillingError, AIRateLimitError, AIServiceError, ValidationError) as failure:
         mappings = [(AIAuthenticationError, "provider_key_invalid", "Your provider key is no longer valid.", 422),
                     (AIAuthorizationError, "provider_access_denied", "Your provider key does not allow this model.", 403),
@@ -65,16 +61,4 @@ def chat():
                 code, detail, status_code = mapped_code, mapped_detail, mapped_status
                 break
         return jsonify(status="error", error=code, provider=provider, message=detail), status_code
-    if len(answer) > 8000:
-        answer = answer[:8000]
-    status = finance_sync.sync_status(email, account_id)
-    return jsonify(status="success", answer=answer, meta={
-        "snapshot_id": snapshot["snapshot_id"],
-        "rule_set_version": snapshot["rule_set_version"],
-        "provider": provider,
-        "model": selection["model"],
-        "fetched_at": snapshot["fetched_at"],
-        "stale": status.get("stale", False),
-        "coverage": snapshot["coverage"],
-        "privacy": PRIVACY_NOTE,
-    })
+    return jsonify(status="success", answer=answer, meta=meta)
